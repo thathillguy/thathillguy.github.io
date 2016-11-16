@@ -1,0 +1,41 @@
+.psize {
+  height: 200px;
+  width: 200px;
+  margin: 20px;
+  textAlign: 'center';
+  display: block;
+}
+.psizeplus {
+  height: 235px;
+  width: 200px;
+  margin: 20px;
+  textAlign: 'center';
+  display: block;
+}
+container {
+  height: 100%;
+  width: 100%;
+  display: block;
+}
+.bottom {
+  position: relative;
+  top: 200px;
+  width: 200px;
+  height: 50px;
+  z-index: 1000;
+}
+.center {
+  margin: auto;
+  width: 50%;
+  border: 3px solid green;
+  padding: 10px;
+}
+.sourcebutton {
+  margin-right: 20px;
+  width: 100px;
+  float: left;
+}
+.demobutton {
+  width: 100px;
+  float: left;
+}

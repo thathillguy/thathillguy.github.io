@@ -1,8 +1,9 @@
 import React from 'react';
-import Paper from 'material-ui/Paper';
 
-import TopNav from '../Components/TopNav.jsx'
-import WelcomeComponent from '../Components/WelcomeComponent.jsx'
+import TopNav from '../Components/TopNav.jsx';
+import WelcomeComponent from '../Components/WelcomeComponent.jsx';
+import Project from '../Components/Project.jsx';
+
 
 const style = {
     height: 100,
@@ -17,7 +18,7 @@ export default class IndexContainer extends React.Component {
     render() {
         return (<div>
             <TopNav />
-            <WelcomeComponent />
+            <Project />
         </div>)
     }
 }

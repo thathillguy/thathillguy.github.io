@@ -24,7 +24,14 @@ var config = {
                     cacheDirectory: true,
                     presets: ['react', 'es2015']
                 }
-            }
+            },
+            {
+                test: /\.less$/,
+                loader: "style!css!less"
+            },
+            { test: /\.css$/, loader: "style-loader!css-loader" },
+            { test: /\.png$/, loader: "url-loader?limit=100000" },
+            { test: /\.jpg$/, loader: "file-loader" }
         ]
     }
 };
