@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "MY WEbsite",
   "dependencies": {
+    "css-loader": "^0.25.0",
     "material-ui": "^0.16.1",
     "react": "^15.3.2",
     "react-dom": "^15.3.2",

@@ -20,11 +20,10 @@ export default class TopNav extends React.Component {
         return (
             <Toolbar>
                 <ToolbarGroup firstChild={true}>
-
                     <h3> Logo? </h3>
                 </ToolbarGroup>
                 <ToolbarGroup>
-                    <ToolbarTitle text="Options" />
+                    <ToolbarTitle text="Navigation" />
                     <ToolbarSeparator />
                     <FlatButton label="About" primary={true} />
                     <FlatButton label="Projects" primary={true} />

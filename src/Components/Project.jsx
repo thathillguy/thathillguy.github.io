@@ -8,21 +8,11 @@ import Divider from 'material-ui/Divider';
 import Modal from './Modal.jsx';
 
 
-const style = {
-    height: 100,
-    width: 100,
-    margin: 20,
-    textAlign: 'center',
-    display: 'inline-block',
-};
-
-
 export default class Project extends React.Component {
     constructor(props){
         super(props);
         this.state = {
             Modal: false,
-            pname: "psize"
         }
     }
     changeModal() {
