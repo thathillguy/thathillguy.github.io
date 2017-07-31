@@ -27,6 +27,7 @@ body{
   background-image: url("@{base-url}/templates/meheraj/images/clients-bg.jpg");
   background-size: cover;
   bottom: 0;
+  z-index:1;
 }
 .about{
   width: 100%;
@@ -34,23 +35,18 @@ body{
   background-color: blue;
 }
 .contact{
-  position: relative;
+   text-align: center;
+   position: relative;
    width: 100%;
    height:70%;
 }
+
 .my-info{
   position:relative;
   top:40%;
   text-align: center;
   margin:auto;
   width: 70%
-}
-.border{
-  margin: 1.5%;
-  margin:1.5%;
-  height: 97%;
-  width: 97%;
-  border: 1px solid red;
 }
 .intro h1 {
   font-family: inherit;
@@ -75,4 +71,66 @@ h2 {
   text-transform: uppercase;
   font-weight: 800;
   margin: 0;
+}
+
+.location{
+  position:relative;
+  background-color: white;
+  border: 2px solid darkgrey;
+  border-radius: 5px;
+  width: 100%;
+  margin-right:12.5%;
+  margin-bottom: 4%;
+  z-index: 10;
+}
+.social{
+  position: relative;
+  background-color: white;
+  border: 2px solid darkgrey;
+  border-radius: 5px;
+  width: 100%;
+  margin-right:12.5%;
+  z-index: 10;
+}
+.contactinfo{
+  display: inline-block;
+  position:relative;
+  background-color: white;
+  width: 25%;
+  float:right;
+  margin-right:15%;
+  z-index: 10;
+}
+//Form
+.contactform{
+  display: inline-block;
+  position:relative;
+  background-color: white;
+  border: 2px solid darkgrey;
+  border-radius: 5px;
+  width: 25%;
+  float:left;
+  margin-left:15%;
+  z-index: 10;
+}
+.oneline{
+  width: 75%;
+  margin-left:12.5%;
+  margin-right:12.5%;
+  margin-top:5%;
+}
+.message{
+  width: 75%;
+  margin-left:12.5%;
+  margin-right:12.5%;
+  margin-top:5%;
+  height: 10%;
+}
+.submitbutton{
+  width: 75%;
+  margin-left:12.5%;
+  margin-right:12.5%;
+  margin-top:5%;
+  margin-bottom: 5%;
+  height: 4%;
 }

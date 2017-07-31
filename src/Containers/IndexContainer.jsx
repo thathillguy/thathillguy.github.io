@@ -18,7 +18,6 @@ export default class IndexContainer extends React.Component {
             <div className="index">
                 <HeaderBar />
                 <Intro />
-                <About />
                 <Contact />
             </div>
         )

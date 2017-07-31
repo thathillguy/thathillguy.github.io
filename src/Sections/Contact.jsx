@@ -1,6 +1,7 @@
 import React from 'react';
 import '../Styles/Project.less';
 import ContactForm from '../Components/ContactForm';
+import ContactInfo from '../Components/ContactInfo';
 
 export default class Contact extends React.Component {
     constructor(props) {
@@ -10,7 +11,10 @@ export default class Contact extends React.Component {
         return(
             <div className="contact">
                 <h1> Contact Me </h1>
-                <ContactForm />
+                <div className="row">
+                    <ContactForm />
+                    <ContactInfo />
+                </div>
                 <div className="layover">
 
                 </div>

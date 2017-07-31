@@ -8,11 +8,11 @@ export default class ContactForm extends React.Component {
     }
     render() {
         return(
-            <div>
-                <input type="text" name="name" />
-                <input type="text" name="name" />
-                <input type="text" name="name" />
-                <div type="submit" value="Submit" />
+            <div className="contactform">
+                <input type="text" name="name" placeholder="Full Name" className="oneline"/>
+                <input type="text" name="email" placeholder="Email" className="oneline"/>
+                <textarea type="text" name="message" placeholder="message" className="message"/>
+                <input className="submitbutton" type="button" value="Submit" />
              </div>
         )
     }
