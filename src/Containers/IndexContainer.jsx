@@ -1,28 +1,26 @@
 import React from 'react';
 import '../Styles/Project.less';
 
-import TopNav from '../Components/TopNav.jsx';
-import Project from '../Components/Project.jsx';
+import HeaderBar from '../Components/HeaderBar';
+import Intro from '../Sections/Intro';
+import About from '../Sections/About';
+import Contact from '../Sections/Contact';
 
 export default class IndexContainer extends React.Component {
+    constructor(props){
+        super(props);
+        this.state = {
 
+        }
+    }
     render() {
-        return (<div>
-            <TopNav />
-            <div className="row">
-                <Project text="Intellimed"/>
-                <Project text="Intellimed"/>
-                <Project text="Intellimed"/>
-                <Project text="Intellimed"/>
-                <Project text="Intellimed"/>
+        return(
+            <div className="index">
+                <HeaderBar />
+                <Intro />
+                <About />
+                <Contact />
             </div>
-            <div className="row">
-                <Project text="Intellimed"/>
-                <Project text="Intellimed"/>
-                <Project text="Intellimed"/>
-                <Project text="Intellimed"/>
-                <Project text="Intellimed"/>
-            </div>
-        </div>)
+        )
     }
 }
