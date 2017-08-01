@@ -29,7 +29,7 @@ export default class ActiveBackgound extends React.Component {
             data.forEach((d2, j) =>{
                 if (d != d2){
                     let f = parseFloat(d2.size.replace('px', ''))
-                        / Math.sqrt(Math.pow((d.x - d2.x),2) + Math.pow((d.y - d2.y),2))
+                        / Math.pow(Math.sqrt(Math.pow((d.x - d2.x),2) + Math.pow((d.y - d2.y),2)),3);
                     fx = fx + f * (d2.x - d.x);
                     fy= fy + f * (d2.y - d.y);
                 }
