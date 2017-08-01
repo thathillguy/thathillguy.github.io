@@ -1,5 +1,7 @@
 import React from 'react';
 import '../Styles/Project.less';
+import DisplayText from '../Components/DisplayText';
+import ActiveBackground from '../Components/ActiveBackgound';
 
 
 export default class Intro extends React.Component {
@@ -9,13 +11,12 @@ export default class Intro extends React.Component {
     render() {
         return(
             <div className="intro">
+                <ActiveBackground />
                 <div className="my-info">
                     <h1>
                         Robert Hill
                     </h1>
-                    <h2>
-                        Student
-                    </h2>
+                    <DisplayText />
                 </div>
             </div>
         )

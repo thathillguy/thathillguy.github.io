@@ -10,14 +10,7 @@ export default class Contact extends React.Component {
     render() {
         return(
             <div className="contact">
-                <h1> Contact Me </h1>
-                <div className="row">
-                    <ContactForm />
-                    <ContactInfo />
-                </div>
-                <div className="layover">
-
-                </div>
+                    <ContactForm toggle_modal={this.props.toggle_modal}/>
             </div>
 
         )

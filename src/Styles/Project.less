@@ -4,7 +4,7 @@ body{
 }
 .headerbar{
   width: 100%;
-  height:5%;
+  height:46px;
   background-color: black;
 }
 .index{
@@ -12,11 +12,8 @@ body{
 }
 .intro{
   width: 100%;
-  height:60%;
+  height:94%;
   padding:0;
-  @base-url: "http://codeglim.com";
-  background-image: url("@{base-url}/templates/meheraj/images/personal/personal-bg.jpg");
-  background-size: cover;
 }
 .layover{
   position: absolute;
@@ -36,27 +33,30 @@ body{
 }
 .contact{
    text-align: center;
-   position: relative;
-   width: 100%;
-   height:70%;
+   position: absolute;
+   width: 60%;
+   height:100%;
+   margin-right: 20%;
+   margin-left: 20%;
 }
 
 .my-info{
   position:relative;
-  top:40%;
+  top:10%;
   text-align: center;
   margin:auto;
-  width: 70%
+  width: 70%;
+  z-index: 10;
 }
 .intro h1 {
   font-family: inherit;
-  color: #fff;
+  color: #000;
   font-size: 50px;
   text-transform: uppercase;
   font-weight: 800;
   margin: 0;
 }
-.contact h1 {
+.contactform h1 {
   font-family: inherit;
   color: #000;
   font-size: 50px;
@@ -66,40 +66,18 @@ body{
 }
 h2 {
   font-family: inherit;
-  color: #fff;
+  color: #000;
   font-size: 25px;
   text-transform: uppercase;
   font-weight: 800;
   margin: 0;
 }
-
-.location{
-  position:relative;
-  background-color: white;
-  border: 2px solid darkgrey;
-  border-radius: 5px;
-  width: 100%;
-  margin-right:12.5%;
-  margin-bottom: 4%;
-  z-index: 10;
-}
-.social{
-  position: relative;
-  background-color: white;
-  border: 2px solid darkgrey;
-  border-radius: 5px;
-  width: 100%;
-  margin-right:12.5%;
-  z-index: 10;
-}
-.contactinfo{
-  display: inline-block;
-  position:relative;
-  background-color: white;
-  width: 25%;
-  float:right;
-  margin-right:15%;
-  z-index: 10;
+.modal{
+  position:absolute;
+  z-index:100;
+  width:100%;
+  height:40%;
+  bottom: 15%;
 }
 //Form
 .contactform{
@@ -108,13 +86,14 @@ h2 {
   background-color: white;
   border: 2px solid darkgrey;
   border-radius: 5px;
-  width: 25%;
+  width: 100%;
   float:left;
-  margin-left:15%;
   z-index: 10;
+  height:100%;
 }
 .oneline{
   width: 75%;
+  height: 7%;
   margin-left:12.5%;
   margin-right:12.5%;
   margin-top:5%;
@@ -124,13 +103,47 @@ h2 {
   margin-left:12.5%;
   margin-right:12.5%;
   margin-top:5%;
-  height: 10%;
+  height: 25%;
 }
 .submitbutton{
   width: 75%;
   margin-left:12.5%;
   margin-right:12.5%;
-  margin-top:5%;
+  margin-top:2%;
   margin-bottom: 5%;
-  height: 4%;
+  height: 6%;
+}
+.contactbutton{
+  position: relative;
+  top: 5px;
+  float: right;
+  margin-right: 20%;
+}
+.social-icon{
+  float: right;
+  padding:7px;
+}
+.background{
+  width:100%;
+  height:40%;
+}
+.introview{
+  position:absolute;
+  width: 100%;
+  height: 90%;
+  z-index: 0;
+}
+.headerbar h4{
+  text-align: center;
+  margin:0;
+  color: white;
+  font-size: 25px;
+}
+.close{
+  position:relative;
+  height: 7%;
+  width: 7%;
+  float:right;
+  margin-top:2%;
+  margin-right:1%;
 }
