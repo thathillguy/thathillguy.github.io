@@ -8,10 +8,17 @@ export default class ActiveBackgound extends React.Component {
 
     constructor(props) {
         super(props);
+        let achievements = [{date: 'September 1st, 2017', desc: 'First day of University', colour: 'blue', size: '6px'}];
         let data = [];
         for (let i = 0; i < 100; i++){
-            data = data.concat(
-                {x: Math.random()*100, y: Math.random()*100, vx: 0, vy: 0, colour: 'red', size: '3px'});
+            if (i < acievements.length -1){
+                data = data.concat(
+                    {x: Math.random()*100, y: Math.random()*100, vx: 0, vy: 0, colour: achievements[i].colour, size: achievements[i].size});
+            }
+            else {
+                data = data.concat(
+                    {x: Math.random()*100, y: Math.random()*100, vx: 0, vy: 0, colour: 'red', size: '3px'});   
+            }
         }
         this.state =  {
             width: 600,
