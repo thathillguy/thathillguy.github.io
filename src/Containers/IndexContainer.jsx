@@ -12,20 +12,27 @@ export default class IndexContainer extends React.Component {
     constructor(props){
         super(props);
         this.state = {
-            active_modal: false
+            active: 'intro'
         }
     }
-    toggle_modal(value) {
-        this.setState({active_modal: value});
+    contact(value) {
+        this.setState({active: value});
     }
     render() {
+        let display;
+        switch (this.state.active) {
+            case 'intro':
+                display = <Intro />;
+                break;
+            case 'contact':
+                display = <Contact />
+                break;
+        }
+        console.log(this.state.active);
         return(
             <div className="index">
-                <HeaderBar toggle_modal={this.toggle_modal.bind(this)}/>
-                <Intro />
-                <Modal active={this.state.active_modal} >
-                    <Contact toggle_modal={this.toggle_modal.bind(this)} />
-                </Modal>
+                <HeaderBar contact={this.contact.bind(this)}/>
+                {display}
             </div>
         )
     }

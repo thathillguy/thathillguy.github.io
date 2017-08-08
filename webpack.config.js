@@ -12,13 +12,13 @@ var config = {
         publicPath: 'http://localhost:8080/built/'
     },
     resolve: {
-        extensions: ['', '.js', '.jsx']
+        extensions: ['.js', '.jsx']
     },
     module: {
         loaders: [
             {
                 test: /\.jsx?$/,
-                loader: 'babel',
+                loader: 'babel-loader',
                 exclude: /node_modules/,
                 query: {
                     cacheDirectory: true,
@@ -27,7 +27,7 @@ var config = {
             },
             {
                 test: /\.less$/,
-                loader: "style!css!less"
+                loader: "style-loader!css-loader!less-loader"
             },
             { test: /\.css$/, loader: "style-loader!css-loader" },
             { test: /\.png$/, loader: "url-loader?limit=100000" },

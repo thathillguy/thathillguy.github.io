@@ -10,14 +10,15 @@ export default class ActiveBackgound extends React.Component {
         super(props);
         let achievements = [{date: 'September 1st, 2017', desc: 'First day of University', colour: 'blue', size: '6px'}];
         let data = [];
-        for (let i = 0; i < 100; i++){
-            if (i < acievements.length -1){
+        const colours = ['#E24e42', '#e9b000','#EB6E80', '#008F95'];
+        for (let i = 0; i < 10; i++){
+            if (i < achievements.length -1){
                 data = data.concat(
-                    {x: Math.random()*100, y: Math.random()*100, vx: 0, vy: 0, colour: achievements[i].colour, size: achievements[i].size});
+                    {x: Math.random()*90, y: Math.random()*90, vx: 0, vy: 0, colour: colours[i % 4], size: achievements[i].size});
             }
             else {
                 data = data.concat(
-                    {x: Math.random()*100, y: Math.random()*100, vx: 0, vy: 0, colour: 'red', size: '3px'});   
+                    {x: Math.random()*90, y: Math.random()*90, vx: 0, vy: 0, colour: colours[i % 4], size: Math.floor(Math.random() * 15) + 15 + 'px'});
             }
         }
         this.state =  {
@@ -36,7 +37,7 @@ export default class ActiveBackgound extends React.Component {
             data.forEach((d2, j) =>{
                 if (d != d2){
                     let f = parseFloat(d2.size.replace('px', ''))
-                        / Math.pow(Math.sqrt(Math.pow((d.x - d2.x),2) + Math.pow((d.y - d2.y),2)),3);
+                        / Math.sqrt(Math.pow((d.x - d2.x),2) + Math.pow((d.y - d2.y),2));
                     fx = fx + f * (d2.x - d.x);
                     fy= fy + f * (d2.y - d.y);
                 }
