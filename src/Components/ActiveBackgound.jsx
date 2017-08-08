@@ -11,14 +11,14 @@ export default class ActiveBackgound extends React.Component {
         let achievements = [{date: 'September 1st, 2017', desc: 'First day of University', colour: 'blue', size: '6px'}];
         let data = [];
         const colours = ['#E24e42', '#e9b000','#EB6E80', '#008F95'];
-        for (let i = 0; i < 10; i++){
+        for (let i = 0; i < 100; i++){
             if (i < achievements.length -1){
                 data = data.concat(
-                    {x: Math.random()*90, y: Math.random()*90, vx: 0, vy: 0, colour: colours[i % 4], size: achievements[i].size});
+                    {x: Math.random()*150, y: Math.random()*90, vx: 0, vy: 0, colour: colours[i % 4], size: achievements[i].size});
             }
             else {
                 data = data.concat(
-                    {x: Math.random()*90, y: Math.random()*90, vx: 0, vy: 0, colour: colours[i % 4], size: Math.floor(Math.random() * 15) + 15 + 'px'});
+                    {x: Math.random()*150-25, y: Math.random()*90, vx: 0, vy: 0, colour: colours[i % 4], size: Math.floor(Math.random() * 15) + 10 + 'px'});
             }
         }
         this.state =  {
@@ -33,7 +33,7 @@ export default class ActiveBackgound extends React.Component {
         const newdata = data.map((d, i)=>{
             let fx = 0;
             let fy = 0;
-            let dt = 0.005;
+            let dt = 0.0005;
             data.forEach((d2, j) =>{
                 if (d != d2){
                     let f = parseFloat(d2.size.replace('px', ''))

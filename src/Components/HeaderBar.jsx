@@ -7,8 +7,8 @@ export default class HeaderBar extends React.Component {
     constructor(props) {
         super(props);
     }
-    contact(){
-        this.props.contact('contact');
+    contact(val){
+        this.props.contact(val);
     }
     render() {
         return(
@@ -22,8 +22,8 @@ export default class HeaderBar extends React.Component {
                 <a className="social-icon" href="https://twitter.com/RobertHill352">
                     <img  src="src/Resources/social-1_square-twitter.svg" />
                 </a>
-                <FlatButton className="contactbutton" label="contact" primary={true} onClick={this.contact.bind(this)}/>
-
+                <FlatButton className="contactbutton" label="contact" primary={true} onClick={this.contact.bind(this, 'contact')}/>
+                <FlatButton className="contactbutton" label="home" primary={true} onClick={this.contact.bind(this, 'intro')}/>
             </div>
         )
     }
