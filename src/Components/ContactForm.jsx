@@ -10,7 +10,7 @@ export default class ContactForm extends React.Component {
         return(
             <div className="contactform">
                 <h1 style={{float:'left', marginLeft:'12.5%', marginRight:'none', width: '75%'}}>
-                    Contact Me
+                    Get In Touch
                 </h1>
                 <input type="text" name="name" placeholder="Full Name" className="oneline"/>
                 <input type="text" name="email" placeholder="Email" className="oneline"/>

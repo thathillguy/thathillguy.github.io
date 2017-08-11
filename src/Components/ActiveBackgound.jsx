@@ -8,18 +8,16 @@ export default class ActiveBackgound extends React.Component {
 
     constructor(props) {
         super(props);
-        let achievements = [{date: 'September 1st, 2017', desc: 'First day of University', colour: 'blue', size: '6px'}];
         let data = [];
         const colours = ['#E24e42', '#e9b000','#EB6E80', '#008F95'];
+        let x, y, dx, dy;
         for (let i = 0; i < 100; i++){
-            if (i < achievements.length -1){
+                x = Math.random()*150-25;
+                y =   Math.random()*90;
+                dy = (50-x)/150;
+                dx = (y-50)/90;
                 data = data.concat(
-                    {x: Math.random()*150, y: Math.random()*90, vx: 0, vy: 0, colour: colours[i % 4], size: achievements[i].size});
-            }
-            else {
-                data = data.concat(
-                    {x: Math.random()*150-25, y: Math.random()*90, vx: 0, vy: 0, colour: colours[i % 4], size: Math.floor(Math.random() * 15) + 10 + 'px'});
-            }
+                    {x: x, y:y, vx: 20*dx, vy: 20*dy , colour: colours[i % 4], size: Math.random()* 7 +3 + 'px'});
         }
         this.state =  {
             width: 600,
@@ -30,23 +28,30 @@ export default class ActiveBackgound extends React.Component {
 
     updatePos(){
         const data = this.state.data;
-        const newdata = data.map((d, i)=>{
+        const cx = 50;
+        const cy = 50;
+        let newdata = [];
+        data.pop();
+        data.forEach((d, i)=>{
             let fx = 0;
             let fy = 0;
-            let dt = 0.0005;
-            data.forEach((d2, j) =>{
-                if (d != d2){
-                    let f = parseFloat(d2.size.replace('px', ''))
-                        / Math.sqrt(Math.pow((d.x - d2.x),2) + Math.pow((d.y - d2.y),2));
-                    fx = fx + f * (d2.x - d.x);
-                    fy= fy + f * (d2.y - d.y);
-                }
-            });
+            let dt = 0.01;
+
+            let f = parseFloat(4)
+                / Math.sqrt(Math.pow((d.x - cx),2) + Math.pow((d.y - cy),2));
+
+            fx = fx + f * (cx - d.x);
+            fy= fy + f * (cy - d.y);
+
+
             let x = d.x + d.vx * dt + fx * dt * dt;
             let y = d.y + d.vy * dt + fy * dt * dt;
             let vx =  d.vx + fx * dt;
-            let vy =  d.vy + fy * dt; return {x: x, y:y, vx: vx, vy: vy, colour: d.colour, size: d.size}
+            let vy =  d.vy + fy * dt;
+
+            newdata = newdata.concat({x: x, y:y, vx: vx, vy: vy, colour: d.colour, size: d.size})
         });
+        newdata = newdata.concat({x: 50, y:50, vx: 0, vy: 0, colour: 'black', size: '15px'});
         this.setState({data: newdata})
     }
     render() {
@@ -88,54 +93,3 @@ export default class ActiveBackgound extends React.Component {
         );
     }
 }
-
-var Axis=React.createClass({
-    propTypes: {
-        h:React.PropTypes.number,
-        axis:React.PropTypes.func,
-        axisType:React.PropTypes.oneOf(['x','y'])
-
-    },
-
-    componentDidUpdate: function () { this.renderAxis(); },
-    componentDidMount: function () { this.renderAxis(); },
-    renderAxis: function () {
-        var node = ReactDOM.findDOMNode(this);
-        d3.select(node).call(this.props.axis);
-
-    },
-    render: function () {
-
-        var translate = "translate(0,"+(this.props.h)+")";
-
-        return (
-            <g className="axis" transform={this.props.axisType=='x'?translate:""} >
-            </g>
-        );
-    }
-
-});
-
-var Grid=React.createClass({
-    propTypes: {
-        h:React.PropTypes.number,
-        grid:React.PropTypes.func,
-        gridType:React.PropTypes.oneOf(['x','y'])
-    },
-
-    componentDidUpdate: function () { this.renderGrid(); },
-    componentDidMount: function () { this.renderGrid(); },
-    renderGrid: function () {
-        var node = ReactDOM.findDOMNode(this);
-        d3.select(node).call(this.props.grid);
-
-    },
-    render: function () {
-        var translate = "translate(0,"+(this.props.h)+")";
-        return (
-            <g className="y-grid" transform={this.props.gridType=='x'?translate:""}>
-            </g>
-        );
-    }
-
-});
