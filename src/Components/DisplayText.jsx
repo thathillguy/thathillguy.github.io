@@ -16,7 +16,7 @@ export default class DisplayText extends React.Component {
         this.state.text.length > 0 ?
             (this.state.status == 'decreasing' ?
                 ( this.state.text == this.text_array[this.state.index] ?
-                    setTimeout(this.decrementText.bind(this), 3000) : this.decrementText())
+                    window.displaytt2 = setTimeout(this.decrementText.bind(this), 3000) : this.decrementText())
                 : this.incrementText()) :
             (this.state.status == 'decreasing' ? this.changeText() : this.incrementText());
 
@@ -37,9 +37,17 @@ export default class DisplayText extends React.Component {
         this.setState({index: i, status: 'increasing'})
     }
     render() {
-        setTimeout(this.updateText.bind(this), 50);
+        window.displaytt = setTimeout(this.updateText.bind(this), 50);
         return(
             <h2> {this.state.text}</h2>
         )
+    }
+    componentWillUnmount(){
+        if (window.displaytt){
+            window.clearInterval(window.displaytt);
+        }
+        if (window.displaytt2){
+            window.clearInterval(window.displaytt2)
+        }
     }
 }

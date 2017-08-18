@@ -54,6 +54,11 @@ export default class ActiveBackgound extends React.Component {
         newdata = newdata.concat({x: 50, y:50, vx: 0, vy: 0, colour: 'black', size: '15px'});
         this.setState({data: newdata})
     }
+    componentWillUnmount(){
+        if (window.activebt) {
+            window.clearInterval(window.activebt)
+        }
+    }
     render() {
         const data = this.state.data;
         var margin = {top:50, right: 50, bottom: 50, left: 50},
@@ -76,14 +81,9 @@ export default class ActiveBackgound extends React.Component {
             }).splice(1))
             .ticks(4);
 
-        var yGrid = d3.axisLeft(y)
-            .ticks(5)
-            .tickSize(-w, 0, 0)
-            .tickFormat("");
-
 
         var transform= 'translate(' + margin.left + ',' + margin.top + ')';
-        setTimeout(this.updatePos.bind(this), 1);
+        window.activebt = setTimeout(this.updatePos.bind(this), 1);
         return (
             <svg className="introview" viewBox="0 -5 600 600" id={'chart'} width={this.state.width} height={this.props.height}>
                 <g transform={transform}>

@@ -140,3 +140,13 @@ a:hover {
   margin-top:2%;
   margin-right:1%;
 }
+path{
+  stroke-dasharray:1000;
+  stroke-dashoffset:1000;
+  animation: draw 5s linear forwards
+}
+@keyframes draw {
+  to {
+    stroke-dashoffset:0;
+  }
+}
