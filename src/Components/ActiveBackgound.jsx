@@ -11,7 +11,7 @@ export default class ActiveBackgound extends React.Component {
         let data = [];
         const colours = ['#E24e42', '#e9b000','#EB6E80', '#008F95'];
         let x, y, dx, dy;
-        for (let i = 0; i < 100; i++){
+        for (let i = 0; i < 150; i++){
                 x = Math.random()*150-25;
                 y =   Math.random()*90;
                 dy = (50-x)/150;
@@ -54,11 +54,6 @@ export default class ActiveBackgound extends React.Component {
         newdata = newdata.concat({x: 50, y:50, vx: 0, vy: 0, colour: 'black', size: '15px'});
         this.setState({data: newdata})
     }
-    componentWillUnmount(){
-        if (window.activebt) {
-            window.clearInterval(window.activebt)
-        }
-    }
     render() {
         const data = this.state.data;
         var margin = {top:50, right: 50, bottom: 50, left: 50},
@@ -83,7 +78,7 @@ export default class ActiveBackgound extends React.Component {
 
 
         var transform= 'translate(' + margin.left + ',' + margin.top + ')';
-        window.activebt = setTimeout(this.updatePos.bind(this), 1);
+        window.activebt = window.requestAnimationFrame(this.updatePos.bind(this));
         return (
             <svg className="introview" viewBox="0 -5 600 600" id={'chart'} width={this.state.width} height={this.props.height}>
                 <g transform={transform}>
