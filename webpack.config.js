@@ -9,7 +9,7 @@ var config = {
     output: {
         path: BUILD_DIR,
         filename: 'bundle.js',
-        publicPath: 'http://localhost:8080/'
+        publicPath: 'http://localhost:8080/built/'
     },
     resolve: {
         extensions: ['.js', '.jsx']
