@@ -8,33 +8,42 @@ export default class Contact extends React.Component {
     constructor(props) {
         super(props);
         this.state = {
-            dictionary: {},
+            dictionary: [],
             words: []
         };
         this.handleKeyPress = this.handleKeyPress.bind(this);
     }
-    handleKeyPress(newWords){
-        let dictionary = {};
-        let words = [];
-        newWords.forEach((word) => {
-            word = word.replace(/\,|\.|\?|\!/, '');
-            if (!dictionary[word]){
-                dictionary[word] = 1;
-                words = words.concat(word)
-            } else{
-                dictionary[word] = dictionary[word] + 1
+
+
+    handleKeyPress(newWords) {
+
+        let dict = new Heap([], null, (a, b) => { return a.val - b.val });
+
+        const searchByKey = (key) => {
+            return dict.content.findIndex(u => u.key === key);
+        };
+
+        newWords.replace(/[.,!? ]+/g, ' ').split(/\s|\n/).forEach((word) => {
+            console.log('word', word);
+            if (word.length > 2 && searchByKey(word) === -1){
+                dict.push({key: word, val: 1});
+            } else if (word.length > 2 && searchByKey(word) !== -1){
+                // store previous value
+                let value = dict.content[searchByKey(word)].val;
+                // delete existing object
+                dict.delete({key: word, val: value});
+                // recreate object with new value
+                dict.push({key: word, val: value + 1});
             }
         });
-        words = words.sort((a, b) => {
-            return dictionary[b] - dictionary[a]
-        });
-        this.setState({dictionary: dictionary, words: words});
+        this.setState({dictionary: dict.content});
     }
+
     render() {
         return(
             <div className="contact">
-                <ContactForm handleKeyPress={this.handleKeyPress} />
-                <WordCloud words={this.state.words} dictionary={this.state.dictionary}/>
+                <ContactForm handleKeyPress={this.handleKeyPress.bind(this)} />
+                <WordCloud dictionary={this.state.dictionary}/>
             </div>
 
         )

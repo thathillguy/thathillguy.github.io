@@ -3,10 +3,12 @@
   "version": "1.0.0",
   "description": "MY WEbsite",
   "dependencies": {
+    "chai": "^4.1.1",
     "collections": "^5.0.7",
     "css-loader": "^0.25.0",
     "d3": "^4.10.0",
     "material-ui": "^0.16.1",
+    "mocha": "^3.5.0",
     "react": "^15.3.2",
     "react-dom": "^15.3.2",
     "react-tap-event-plugin": "^1.0.0",

@@ -6,15 +6,22 @@ export default class Chart extends React.Component {
 
     constructor(props){
         super(props);
+        this.dictionary = this.props.dictionary;
     }
     render() {
         return (
             <div className="wordCloud">
             {
-                this.props.words.map((word, id) => {
+                this.dictionary.map((entry, id) => {
                     const style = {};
-                    return <Word className='word' style={style} word={word}
-                          quantity={this.props.dictionary[word]} key={id} />
+                    return (
+                        <Word
+                            className='word'
+                            style={style}
+                            word={entry.key}
+                            quantity={entry.val} key={id}
+                        />
+                    )
                 })
             }
             </div>

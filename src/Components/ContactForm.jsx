@@ -10,7 +10,7 @@ export default class ContactForm extends React.PureComponent {
 
     handleKeyPress(e){
         if (e.keyCode === 32 || e.keyCode === 13 || e.keyCode === 46 || e.keyCode === 33 || e.keyCode === 63 || e.keyCode === 8) {
-            this.props.handleKeyPress(e.target.value.split(/\s|\n/));
+            this.props.handleKeyPress(e.target.value);
         }
     }
 
