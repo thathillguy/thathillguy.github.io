@@ -26,11 +26,20 @@ export default class IndexContainer extends React.Component {
         this.setState({active: value});
     }
     render() {
+        let display;
+        switch (this.state.active) {
+            case 'intro':
+                display = <Intro />;
+                break;
+            case 'contact':
+                display = <Contact />
+                break;
+        }
         console.log(this.state.active);
         return(
             <div className="index">
                 <HeaderBar contact={this.contact}/>
-                {this.state.active === 'intro' ? <Intro /> : <Contact />}
+                {display}
             </div>
         )
     }
