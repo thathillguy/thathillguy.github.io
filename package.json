@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "MY WEbsite",
   "dependencies": {
+    "collections": "^5.0.7",
     "css-loader": "^0.25.0",
     "d3": "^4.10.0",
     "material-ui": "^0.16.1",

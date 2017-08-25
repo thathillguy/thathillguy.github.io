@@ -2,15 +2,18 @@ import React from 'react';
 import '../Styles/Project.less';
 
 
-export default class ContactForm extends React.Component {
+export default class ContactForm extends React.PureComponent {
     constructor(props) {
         super(props);
+        this.handleKeyPress = this.handleKeyPress.bind(this);
     }
+
     handleKeyPress(e){
-        if (e.keyCode == 32 || e.keyCode == 13 || e.keyCode == 46 || e.keyCode == 33 || e.keyCode == 63 || e.keyCode == 8) {
+        if (e.keyCode === 32 || e.keyCode === 13 || e.keyCode === 46 || e.keyCode === 33 || e.keyCode === 63 || e.keyCode === 8) {
             this.props.handleKeyPress(e.target.value.split(/\s|\n/));
         }
     }
+
     render() {
         return(
             <div className="contactform">
@@ -19,7 +22,7 @@ export default class ContactForm extends React.Component {
                 </h1>
                 <input type="text" name="name" placeholder="Full Name" className="oneline"/>
                 <input type="text" name="email" placeholder="Email" className="oneline"/>
-                <textarea onKeyDown={this.handleKeyPress.bind(this)} type="text" name="Message" placeholder="Message" className="message"/>
+                <textarea onKeyDown={this.handleKeyPress} type="text" name="Message" placeholder="Message" className="message"/>
                 <input className="submitbutton" type="button" value="Submit" />
              </div>
         )
