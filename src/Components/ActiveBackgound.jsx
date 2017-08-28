@@ -25,7 +25,9 @@ export default class ActiveBackgound extends React.Component {
             data:  data
         };
     }
-
+    componentWillUnmount(){
+        window.cancelAnimationFrame(window.activebt);
+    }
     updatePos(){
         const data = this.state.data;
         const cx = 50;
