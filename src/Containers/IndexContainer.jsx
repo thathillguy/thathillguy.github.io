@@ -32,7 +32,7 @@ export default class IndexContainer extends React.Component {
                 display = <Intro />;
                 break;
             case 'contact':
-                display = <Contact />
+                display = <Contact />;
                 break;
         }
         console.log(this.state.active);

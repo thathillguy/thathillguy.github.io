@@ -1,23 +1,17 @@
-var webpack = require('webpack');
-var path = require('path');
-
-var BUILD_DIR = path.resolve(__dirname, 'src/client/public');
-var APP_DIR = path.resolve(__dirname, 'src');
-
-var config = {
-    entry: APP_DIR + '/index.jsx',
+module.exports = {
+    entry: './src/index.jsx',
     output: {
-        path: BUILD_DIR,
+        path: __dirname + '/client/public',
         filename: 'bundle.js',
-        publicPath: 'http://localhost:8080/built/'
+        publicPath: 'http://localhost:8080/'
     },
     resolve: {
-        extensions: ['.js', '.jsx']
+        extensions: ['.js','.json','.jsx']
     },
     module: {
         loaders: [
             {
-                test: /\.jsx?$/,
+                test: /\.(js|jsx)$/,
                 loader: 'babel-loader',
                 exclude: /node_modules/,
                 query: {
@@ -27,6 +21,7 @@ var config = {
             },
             {
                 test: /\.less$/,
+                exclude: /node_modules/,
                 loader: "style-loader!css-loader!less-loader"
             },
             { test: /\.css$/, loader: "style-loader!css-loader" },
@@ -35,5 +30,3 @@ var config = {
         ]
     }
 };
-
-module.exports = config;
