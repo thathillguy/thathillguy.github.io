@@ -1,12 +1,12 @@
 module.exports = {
-    entry: './src/index.jsx',
+    entry: './src/index',
     output: {
         path: __dirname + '/client/public',
         filename: 'bundle.js',
         publicPath: 'http://localhost:8080/'
     },
     resolve: {
-        extensions: ['.js','.json','.jsx']
+      extensions: ['','.js','.json','.jsx']
     },
     module: {
         loaders: [
