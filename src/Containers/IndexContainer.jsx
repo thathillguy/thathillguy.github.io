@@ -3,10 +3,9 @@ import '../Styles/Project.less';
 
 import HeaderBar from '../Components/HeaderBar';
 import Intro from '../Sections/Intro';
-import About from '../Sections/About';
 import Contact from '../Sections/Contact';
-import ActiveBackground from '../Components/ActiveBackgound'
-import Modal from '../Components/Modal';
+import CCA from '../Sections/CCA';
+
 
 export default class IndexContainer extends React.Component {
     constructor(props){
@@ -23,9 +22,6 @@ export default class IndexContainer extends React.Component {
         switch (this.state.active) {
             case 'intro':
                 display = <Intro />;
-                break;
-            case 'contact':
-                display = <Contact />
                 break;
         }
         console.log(this.state.active);

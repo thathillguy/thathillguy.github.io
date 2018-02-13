@@ -1,10 +1,12 @@
 {
   "name": "thathillguy.github.io",
   "version": "1.0.0",
-  "description": "MY WEbsite",
+  "description": "MY Website",
   "dependencies": {
+    "child_process": "^1.0.2",
     "css-loader": "^0.25.0",
     "d3": "^4.10.0",
+    "fs": "0.0.1-security",
     "material-ui": "^0.16.1",
     "react": "^15.3.2",
     "react-dom": "^15.3.2",

@@ -5,7 +5,8 @@ import IndexContainer from './Containers/IndexContainer.jsx';
 
 class App extends React.Component {
     render () {
-        return (<MuiThemeProvider>
+        return (
+         <MuiThemeProvider>
             <IndexContainer />
         </MuiThemeProvider>);
     }

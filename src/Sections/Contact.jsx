@@ -1,8 +1,7 @@
 import React from 'react';
 import '../Styles/Project.less';
 import ContactForm from '../Components/ContactForm';
-import WordCloud from '../Components/WordCloud';
-
+import VersusBackGround from '../Components/VersusBackground';
 export default class Contact extends React.Component {
     constructor(props) {
         super(props);
@@ -32,7 +31,7 @@ export default class Contact extends React.Component {
         return(
             <div className="contact">
                     <ContactForm handleKeyPress={this.handleKeyPress.bind(this)} />
-                    <WordCloud words={this.state.words} dictionary={this.state.dictionary}/>
+                    <VersusBackGround/>
             </div>
 
         )

@@ -1,7 +1,7 @@
 import React from 'react';
 
 
-export default class Chart extends React.Component {
+export default class dots extends React.Component {
 
     constructor(props){
         super(props);
