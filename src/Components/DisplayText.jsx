@@ -6,11 +6,11 @@ export default class DisplayText extends React.Component {
     constructor(props) {
         super(props);
         this.state = {
-            text: 'student yo',
+            text: 'student',
             status: 'decreasing',
             index: 0
         };
-        this.text_array = ['student', 'developer', 'data enthusiast'];
+        this.text_array = ['Problem Solver', 'developer', 'data enthusiast'];
     }
     updateText(){
         this.state.text.length > 0 ?
