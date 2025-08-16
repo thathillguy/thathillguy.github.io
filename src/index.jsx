@@ -1,15 +1,7 @@
+// src/index.jsx
 import React from 'react';
-import ReactDOM from 'react-dom';
-import MuiThemeProvider from 'material-ui/styles/MuiThemeProvider';
-import Portfolio from './Containers/IndexContainer.jsx';
+import { createRoot } from 'react-dom/client';
+import Portfolio from './src/Containers/IndexContainer.tsx'; // <-- the modern file you pasted earlier
 
-class App extends React.Component {
-    render () {
-        return (
-         <MuiThemeProvider>
-            <Portfolio />
-        </MuiThemeProvider>);
-    }
-}
-
-ReactDOM.render(<App/>, document.getElementById('app'));
+const root = createRoot(document.getElementById('app'));
+root.render(<Portfolio />);
