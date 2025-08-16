@@ -1,4 +1,4 @@
-name: Build and Commit (handles missing lockfile)
+name: Build and Deploy (webpack → root)
 
 on:
   push:
@@ -10,8 +10,9 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest
-    # Avoid infinite loop when the bot commits artifacts
+    # Works great with webpack 5 + React 18
+    runs-on: ubuntu-latest
+    # Avoid re-trigger from the bot's own commit
     if: ${{ github.actor != 'github-actions[bot]' }}
 
     steps:
@@ -20,51 +21,39 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Use Node 14 for old webpack/babel stacks; bump if you upgraded to webpack 5
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 14
+          node-version: 20
 
-      # Install deps: use ci if lockfile exists, otherwise install and commit the new lockfile
-      - name: Install dependencies (create lockfile if missing)
-        shell: bash
+      # Handle missing/old lockfile cleanly
+      - name: Install dependencies
         run: |
           if [ -f package-lock.json ]; then
-            npm ci --legacy-peer-deps
+            npm ci
           else
-            npm install --legacy-peer-deps
+            npm install
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add package-lock.json
             git commit -m "chore: add package-lock.json [skip ci]" || true
           fi
 
-      # Build with your package.json script (add "build": "webpack -p" if you haven't yet)
       - name: Build (webpack)
         run: npm run build
 
-      # Choose ONE of the two publish patterns below:
+      # Copy built assets to repo root so GitHub Pages serves the latest build
+      - name: Copy dist → root
+        run: |
+          cp -f dist/index.html index.html
+          cp -f dist/bundle.js bundle.js
 
-      # (A) Commit the original output dir (keeps bundle in src/client/public)
-      - name: Commit built artifacts (src/client/public)
+      - name: Commit built assets
         uses: EndBug/add-and-commit@v9
         with:
           add: |
-            src/client/public
-          message: "chore: build → src/client/public [skip ci]"
+            index.html
+            bundle.js
+            package-lock.json
+          message: "build: webpack → root [skip ci]"
           default_author: github_actions
-
-      # (B) If your index.html is at repo root and you want the bundle next to it, use this instead:
-      # - name: Copy bundle next to index.html and commit
-      #   shell: bash
-      #   run: |
-      #     test -f "src/client/public/bundle.js"
-      #     cp -f "src/client/public/bundle.js" "bundle.js"
-      #   # then commit:
-      # - uses: EndBug/add-and-commit@v9
-      #   with:
-      #     add: |
-      #       bundle.js
-      #     message: "chore: build → root bundle.js [skip ci]"
-      #     default_author: github_actions
