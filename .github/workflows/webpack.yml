@@ -1,4 +1,4 @@
-name: Build and Commit Webpack Output
+name: Build (webpack 5) and commit to root
 
 on:
   push:
@@ -10,30 +10,35 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest  # your webpack config uses Windows-style paths
+    runs-on: ubuntu-latest
+    if: ${{ github.actor != 'github-actions[bot]' }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # get full history so we can commit back
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
 
-      - name: Install dependencies
-        shell: pwsh
+      - name: Clean lockfile (optional safety if old lock exists)
         run: |
-          if (Test-Path package-lock.json) { npm ci } else { npm install }
+          if [ -f package-lock.json ]; then rm package-lock.json; fi
 
-      - name: Run webpack build
-        run: npm run build
+      - run: npm ci
+      - run: npm run build
 
-      - name: Commit build output
+      # Copy dist/* to repo root so index.html + bundle.js are served by Pages
+      - name: Copy build to root
+        run: |
+          cp -f dist/index.html index.html
+          cp -f dist/bundle.js bundle.js
+
+      - name: Commit built assets
         uses: EndBug/add-and-commit@v9
         with:
-          add: "src/client/public"
-          message: "chore: build output [skip ci]"
+          add: |
+            index.html
+            bundle.js
+            package-lock.json
+          message: "build: webpack5 → root [skip ci]"
           default_author: github_actions
