@@ -1,13 +1,13 @@
 import React from 'react';
 import ReactDOM from 'react-dom';
 import MuiThemeProvider from 'material-ui/styles/MuiThemeProvider';
-import IndexContainer from './Containers/IndexContainer.jsx';
+import Portfolio from './Containers/IndexContainer.jsx';
 
 class App extends React.Component {
     render () {
         return (
          <MuiThemeProvider>
-            <IndexContainer />
+            <Portfolio />
         </MuiThemeProvider>);
     }
 }
