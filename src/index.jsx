@@ -1,7 +1,7 @@
 // src/index.jsx
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import Portfolio from './src/Containers/IndexContainer'; // <-- the modern file you pasted earlier
+import IndexContainer from './Containers/IndexContainer.jsx'; // default export above
 
 const root = createRoot(document.getElementById('app'));
-root.render(<Portfolio />);
+root.render(<IndexContainer />);
