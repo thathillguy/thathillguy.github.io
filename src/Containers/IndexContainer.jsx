@@ -225,4 +225,92 @@ export default function IndexContainer() {
           <Typography variant="h6" fontWeight={800} sx={{ flexGrow: 1 }}>Robert Hill</Typography>
           <NavTabs value={tab} onChange={(_, v) => setTab(v)} />
           <Stack direction="row" gap={1}>
-            <Tooltip title="GitHub"><IconButton component={Link} href="https:
+            <Tooltip title="GitHub"><IconButton component={Link} href="https://github.com/thathillguy" target="_blank" rel="noreferrer"><GitHubIcon /></IconButton></Tooltip>
+            <Tooltip title="LinkedIn"><IconButton component={Link} href="https://www.linkedin.com/in/thathillguy/" target="_blank" rel="noreferrer"><LinkedInIcon /></IconButton></Tooltip>
+            <Tooltip title={dark ? "Light mode" : "Dark mode"}><Switch checked={dark} onChange={(e) => setDark(e.target.checked)} /></Tooltip>
+          </Stack>
+        </Toolbar>
+      </AppBar>
+
+      <Box component="main" sx={{ py: { xs: 6, md: 10 } }}>
+        <Container maxWidth="lg">
+          {/* Hero */}
+          <Grid container spacing={4} alignItems="center">
+            <Grid xs={12} md={8}>
+              <Typography variant="overline" color="text.secondary">Senior Software Engineer</Typography>
+              <Typography variant="h3" fontWeight={900} lineHeight={1.2} sx={{ mt: 1 }}>Building performant systems & delightful UX</Typography>
+              <Typography variant="body1" sx={{ mt: 2 }}>
+                Clean architecture, fast feedback loops, and useful docs. Scroll for a colorful n-body background in the About section.
+              </Typography>
+              <Stack direction="row" gap={1.5} sx={{ mt: 3 }}>
+                <Button variant="contained" size="large" href="#projects">View Projects</Button>
+                <Button variant="outlined" size="large" component={Link} href="/resume.pdf" target="_blank" rel="noreferrer" endIcon={<LaunchIcon/>}>Resume</Button>
+              </Stack>
+            </Grid>
+          </Grid>
+
+          {/* Projects */}
+          <Box id="projects" sx={{ mt: 8 }}>
+            <Typography variant="h4" fontWeight={800} gutterBottom>Selected Projects</Typography>
+            <Grid container spacing={3}>
+              {projects.map((p) => (
+                <Grid key={p.title} xs={12} md={4}>
+                  <Paper variant="outlined" sx={{ p: 3, height: "100%" }}>
+                    <Typography variant="h6" fontWeight={700}>{p.title}</Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>{p.desc}</Typography>
+                    <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 2 }}>
+                      {p.chips.map((c) => <Chip size="small" key={c} label={c} />)}
+                    </Stack>
+                    <Stack direction="row" gap={1.5} sx={{ mt: 2 }}>
+                      {p.cta.map((c) => (<Button key={c.label} size="small" component={Link} href={c.href}>{c.label}</Button>))}
+                    </Stack>
+                  </Paper>
+                </Grid>
+              ))}
+            </Grid>
+          </Box>
+
+          {/* About with BACKGROUND */}
+          <Box
+            id="about-section"
+            sx={{
+              mt: 8,
+              position: "relative",       // <-- required so the canvas can absolutely cover this box
+              minHeight: { xs: 420, md: 520 },
+              borderRadius: 2,
+              overflow: "hidden",
+            }}
+          >
+            {/* The animated, centered background lives behind this content */}
+            <NBodyBackgroundSection attachToId="about-section" />
+
+            {/* Foreground content with some backdrop styling for readability */}
+            <Paper
+              variant="outlined"
+              sx={{
+                p: 3,
+                bgcolor: "rgba(0,0,0,0.15)",
+                backdropFilter: "blur(2px)",
+              }}
+            >
+              <Typography variant="h4" fontWeight={800} gutterBottom>About</Typography>
+              <Typography variant="body1">
+                I lead projects end-to-end—from architecture to shipped product. Recent work includes a forecasting UI backed
+                by real-time CRM integrations and a high-signal pipeline query service (PBJ) for analytics on large datasets.
+              </Typography>
+            </Paper>
+          </Box>
+
+          <Divider sx={{ my: 6 }} />
+          <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ xs: "flex-start", sm: "center" }} justifyContent="space-between" gap={2}>
+            <Typography variant="body2" color="text.secondary">© {new Date().getFullYear()} Robert Hill</Typography>
+            <Stack direction="row" gap={1}>
+              <Button size="small" component={Link} href="https://thathillguy.github.io/">Legacy site</Button>
+              <Button size="small" component={Link} href="#projects">Projects</Button>
+            </Stack>
+          </Stack>
+        </Container>
+      </Box>
+    </ThemeProvider>
+  );
+}
