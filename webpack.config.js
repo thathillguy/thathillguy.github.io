@@ -1,44 +1,40 @@
-var webpack = require('webpack');
-var path = require('path');
+const path = require('path');
+const HtmlWebpackPlugin = require('html-webpack-plugin');
 
-var BUILD_DIR = path.resolve(__dirname, 'src/client/public');
-var APP_DIR = path.resolve(__dirname, 'src\\');
-
-var config = {
-    entry: APP_DIR + '\\index.jsx',
-    output: {
-        path: BUILD_DIR,
-        filename: 'bundle.js',
-        publicPath: 'http://localhost:8080/built/'
-    },
-    resolve: {
-        extensions: ['', '.js', '.jsx']
-    },
-    externals: [
-        {
-            xmlhttprequest: '{XMLHttpRequest: XMLHttpRequest}'
-        }
-    ],
-    module: {
-        loaders: [
-            {
-                test: /\.jsx?$/,
-                loader: 'babel-loader',
-                exclude: /node_modules/,
-                query: {
-                    cacheDirectory: true,
-                    presets: ['react', 'es2015']
-                }
-            },
-            {
-                test: /\.less$/,
-                loader: "style-loader!css-loader!less-loader"
-            },
-            { test: /\.css$/, loader: "style-loader!css-loader" },
-            { test: /\.png$/, loader: "url-loader?limit=100000" },
-            { test: /\.jpg$/, loader: "file-loader" }
-        ]
-    }
+module.exports = {
+  entry: path.resolve(__dirname, 'src/index.jsx'), // entry file shown below
+  output: {
+    path: path.resolve(__dirname, 'dist'),
+    filename: 'bundle.js',
+    publicPath: '' // relative URLs on Pages
+  },
+  resolve: {
+    extensions: ['.js', '.jsx']
+  },
+  module: {
+    rules: [
+      {
+        test: /\.jsx?$/,
+        exclude: /node_modules/,
+        use: { loader: 'babel-loader', options: {
+          presets: [
+            ['@babel/preset-env', { targets: 'defaults' }],
+            ['@babel/preset-react', { runtime: 'automatic' }]
+          ]
+        }}
+      },
+      { test: /\.css$/, use: ['style-loader', 'css-loader'] }
+    ]
+  },
+  plugins: [
+    new HtmlWebpackPlugin({
+      template: path.resolve(__dirname, 'index.html'), // uses your root index.html
+      inject: 'body'
+    })
+  ],
+  devServer: {
+    static: { directory: path.resolve(__dirname, 'dist') },
+    port: 8080,
+    historyApiFallback: true
+  }
 };
-
-module.exports = config;
