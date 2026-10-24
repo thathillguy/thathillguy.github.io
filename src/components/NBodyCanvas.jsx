@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { NBody, COLOURS } from '../sim/nbody.js';
 
 const UNITS = 100;        // the shorter side of the canvas spans this many sim units
-const FLING = 0.4;        // sim velocity per sim unit of drag
+const FLING = 1.0;        // launch speed per sim unit of drag: a short tug orbits, a long drag escapes
 const TAP_PX = 5;         // pointer movement under this counts as a click, not a drag
 const TAU = Math.PI * 2;
 
