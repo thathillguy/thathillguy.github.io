@@ -9,7 +9,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/sim/*.test.js"
+    "test": "node --test site/src/sim/*.test.js"
   },
   "dependencies": {
     "react": "^19.2.0",
