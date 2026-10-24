@@ -1,44 +1,48 @@
 import { useEffect, useState } from 'react';
 
-const PHRASES = ['Problem Solver', 'developer', 'data enthusiast'];
-const TICK = 50;   // ms per character
-const HOLD = 3000; // ms a finished phrase stays up
+const PHRASES = ['Problem solver', 'Developer', 'Data enthusiast'];
 
-// Types each phrase out, holds it, deletes it, moves on. Starts by erasing the
-// initial word, a nod to the 2017 original, which opened on "student".
-export default function Typewriter({ phrases = PHRASES, initial = 'student' }) {
-  const [text, setText] = useState(initial);
+// Types each phrase with a slightly uneven cadence, holds it, clears it, moves on.
+export default function Typewriter({ phrases = PHRASES }) {
+  const [text, setText] = useState('');
 
   useEffect(() => {
-    let current = initial;
-    let index = -1;
-    let deleting = true;
+    let index = 0;
+    let length = 0;
+    let deleting = false;
     let timer;
 
     const tick = () => {
-      let delay = TICK;
+      const target = phrases[index];
+      let delay;
       if (deleting) {
-        if (current.length > 0) {
-          current = current.slice(0, -1);
-        } else {
-          index = (index + 1) % phrases.length;
+        length -= 1;
+        delay = 35;
+        if (length === 0) {
           deleting = false;
+          index = (index + 1) % phrases.length;
+          delay = 450;
         }
       } else {
-        const target = phrases[index];
-        current = target.slice(0, current.length + 1);
-        if (current === target) {
+        length += 1;
+        delay = 65 + Math.random() * 50;
+        if (length === target.length) {
           deleting = true;
-          delay = HOLD;
+          delay = 2400;
         }
       }
-      setText(current);
+      setText(target.slice(0, length));
       timer = setTimeout(tick, delay);
     };
 
-    timer = setTimeout(tick, TICK);
+    timer = setTimeout(tick, 700);
     return () => clearTimeout(timer);
-  }, [phrases, initial]);
+  }, [phrases]);
 
-  return <h2 aria-live="polite">{text}</h2>;
+  return (
+    <p className="tagline" aria-live="polite">
+      <span>{text}</span>
+      <span className="caret" aria-hidden="true" />
+    </p>
+  );
 }

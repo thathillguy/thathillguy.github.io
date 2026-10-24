@@ -83,3 +83,13 @@ test('with merging off, bodies pass through each other', () => {
   assert.equal(sim.count, 2);
   assert.equal(sim.stats.merges, 0);
 });
+
+test('previewPath follows the same orbit the integrator produces', () => {
+  const sim = new NBody({ bodies: 0, random: seeded() });
+  const [vx, vy] = sim.orbitalVelocity(35, 0, 0.8);
+  const path = sim.previewPath(35, 0, vx, vy, 60, 1 / 30);
+  sim.addBody(35, 0, vx, vy, 1, 0);
+  for (let k = 0; k < 60 * 8; k++) sim.step(); // 2 s at dt = 1/240
+  const dx = path[118] - sim.x[0], dy = path[119] - sim.y[0];
+  assert.ok(Math.hypot(dx, dy) < 0.5, `preview drifted ${Math.hypot(dx, dy)}`);
+});

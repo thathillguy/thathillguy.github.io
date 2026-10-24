@@ -22,7 +22,7 @@ from the edge.
 Pushing to `master` runs `.github/workflows/deploy.yml`, which builds the site and publishes it
 two ways so that either GitHub Pages mode works:
 
-- the built files are committed to the repo root (`index.html`, `assets/`, `favicon.svg`, `icons/`)
+- the built files are committed to the repo root (`index.html`, `assets/`, `favicon.svg`)
   for the "deploy from a branch" setting, and
 - the same build is uploaded as a Pages artifact for the "GitHub Actions" setting.
 

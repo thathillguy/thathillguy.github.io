@@ -250,6 +250,31 @@ export class NBody {
     return changed;
   }
 
+  /**
+   * Where a test body launched from (x, y) with velocity (vx, vy) would go under the
+   * central body alone, as a flat [x0, y0, x1, y1, ...] array. Used to draw the aim preview.
+   */
+  previewPath(x, y, vx, vy, steps = 90, dt = 1 / 30) {
+    const { centralMass, centralRadius } = this.o;
+    const c2 = centralRadius * centralRadius;
+    const out = new Float64Array(steps * 2);
+    const sub = 4, h = dt / sub;
+    for (let k = 0; k < steps; k++) {
+      for (let s = 0; s < sub; s++) {
+        const d2 = x * x + y * y + c2;
+        const f = -centralMass / (d2 * Math.sqrt(d2));
+        vx += f * x * h;
+        vy += f * y * h;
+        x += vx * h;
+        y += vy * h;
+      }
+      out[2 * k] = x;
+      out[2 * k + 1] = y;
+      if (x * x + y * y < c2) return out.subarray(0, 2 * k + 2);
+    }
+    return out;
+  }
+
   /** Total mechanical energy (kinetic + softened potential), for tests and tuning. */
   energy() {
     const { n, x, y, vx, vy, m } = this;
