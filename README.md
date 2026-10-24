@@ -2,13 +2,18 @@
 
 Robert Hill's personal site: a live n-body gravity simulation behind the name card.
 
-Every body attracts every other body (softened Newtonian gravity, velocity Verlet, all pairs),
-with a heavy black body pinned at the centre. Click to drop a body into a circular orbit, or
-drag to fling one. Bodies that fall into the centre or get thrown out of the system are replaced
-from the edge.
+Every body attracts every other body (softened Newtonian gravity, Barnes-Hut quadtree, velocity
+Verlet) with a heavy black body pinned at the centre. Click to drop a body into a circular orbit,
+or pull back and release to fling one. Bodies that fall into the centre or get thrown out of the
+system are replaced from the edge. The slider sets the population, up to 20,000 bodies.
 
-- `site/src/sim/nbody.js` is the physics. It has no DOM or React dependencies and is tested with `node --test`.
-- `site/src/components/NBodyCanvas.jsx` renders it on a canvas and handles the pointer.
+- `site/src/sim/nbody.js` is the physics. No DOM or React dependencies; tested with `node --test`,
+  including a check of the tree's accelerations against the exact all-pairs result.
+- `site/src/sim/worker.js` runs it in a Web Worker and streams packed positions to the page,
+  transferring the same two buffers back and forth so nothing is allocated per frame.
+- `site/src/render/discs.js` draws the bodies with WebGL2 instanced quads and a signed-distance
+  circle shader (flat fill, black rim), with a 2D canvas fallback.
+- `site/src/components/NBodyCanvas.jsx` wires those together and handles the pointer.
 
 ## Develop
 

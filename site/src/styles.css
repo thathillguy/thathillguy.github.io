@@ -165,3 +165,50 @@ body {
     transition: none;
   }
 }
+
+/* Body-count control */
+.bodycount {
+  position: absolute;
+  left: 20px;
+  bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  font-size: 12.5px;
+  color: #333;
+  font-variant-numeric: tabular-nums;
+}
+
+.bodycount label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.bodycount-value {
+  min-width: 9ch;
+}
+
+.bodycount input[type="range"] {
+  width: 120px;
+  accent-color: #000;
+  margin: 0;
+}
+
+.bodycount-stats {
+  color: #777;
+  padding-left: 12px;
+  border-left: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+@media (max-width: 640px) {
+  .bodycount-stats { display: none; }
+  .bodycount input[type="range"] { width: 90px; }
+  .hint { bottom: 72px; }
+}

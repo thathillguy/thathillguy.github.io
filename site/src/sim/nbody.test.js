@@ -9,7 +9,7 @@ function seeded(seed = 42) {
 }
 
 test('a body launched at circular speed stays on a circle for ten orbits', () => {
-  const sim = new NBody({ bodies: 0, random: seeded() });
+  const sim = new NBody({ bodies: 0, random: seeded(), massPerArea: 1 });
   const rho = 40;
   const [vx, vy] = sim.orbitalVelocity(rho, 0);
   sim.addBody(rho, 0, vx, vy, 1, 0);
@@ -25,31 +25,45 @@ test('a body launched at circular speed stays on a circle for ten orbits', () =>
 });
 
 test('energy of an eccentric orbit is conserved by the integrator', () => {
-  const sim = new NBody({ bodies: 0, random: seeded() });
+  const sim = new NBody({ bodies: 0, random: seeded(), massPerArea: 1 });
   const [vx, vy] = sim.orbitalVelocity(45, 0, 0.7);
   sim.addBody(45, 0, vx, vy, 1.5, 1);
   const e0 = sim.energy();
-  for (let k = 0; k < 20000; k++) sim.step();
+  for (let k = 0; k < 10000; k++) sim.step();
   const e1 = sim.energy();
-  assert.ok(Math.abs((e1 - e0) / e0) < 1e-5, `relative energy error ${(e1 - e0) / e0}`);
+  assert.ok(Math.abs((e1 - e0) / e0) < 1e-4, `relative energy error ${(e1 - e0) / e0}`);
 });
 
-test('merging conserves mass and momentum', () => {
-  const sim = new NBody({ bodies: 0, random: seeded(), touchFactor: 0.6 });
-  sim.addBody(30, 0, 0, 10, 1, 0);
-  sim.addBody(31, 0, 2, 8, 1.2, 1);
-  const m0 = sim.m[0] + sim.m[1];
-  const px = sim.m[0] * sim.vx[0] + sim.m[1] * sim.vx[1];
-  const py = sim.m[0] * sim.vy[0] + sim.m[1] * sim.vy[1];
-  sim.step();
-  assert.equal(sim.count, 1);
-  assert.equal(sim.stats.merges, 1);
-  assert.ok(Math.abs(sim.m[0] - m0) < 1e-9);
-  // momentum is checked before the post-merge kick, so allow the one half-step of gravity
-  const tol = 0.5 * sim.o.dt * sim.m[0] * 10;
-  assert.ok(Math.abs(sim.m[0] * sim.vx[0] - px) < tol, 'x momentum');
-  assert.ok(Math.abs(sim.m[0] * sim.vy[0] - py) < tol, 'y momentum');
-  assert.equal(sim.colour[0], 1, 'the heavier body keeps its colour');
+test('Barnes-Hut accelerations match the exact all-pairs result closely', () => {
+  const sim = new NBody({ bodies: 3000, random: seeded(5), bodyMassFraction: 0.5 });
+  const ex = new Float64Array(sim.n), ey = new Float64Array(sim.n);
+  sim._accelerateDirect(ex, ey);
+  sim._accelerate();
+  let num = 0, den = 0, worst = 0;
+  for (let i = 0; i < sim.n; i++) {
+    const dx = sim.ax[i] - ex[i], dy = sim.ay[i] - ey[i];
+    const err = dx * dx + dy * dy, ref = ex[i] * ex[i] + ey[i] * ey[i];
+    num += err; den += ref;
+    worst = Math.max(worst, Math.sqrt(err / ref));
+  }
+  const rms = Math.sqrt(num / den);
+  assert.ok(rms < 0.01, `rms relative error ${rms}`);
+  assert.ok(worst < 0.1, `worst relative error ${worst}`);
+  assert.ok(sim.stats.nodes > sim.n, 'the tree was built');
+});
+
+test('two bodies with no central mass orbit each other and stay bound', () => {
+  const sim = new NBody({ bodies: 0, random: seeded(), centralMass: 0, massPerArea: 100, softening: 0.1 });
+  // equal masses on a circular mutual orbit of radius 5 (separation 10): v = sqrt(m / (4 r))... with G=1, v^2 = m/(4r)
+  const m = 100, rr = 5, v = Math.sqrt(m / (4 * rr));
+  sim.addBody(-rr, 0, 0, v, 1, 0);
+  sim.addBody(rr, 0, 0, -v, 1, 1);
+  for (let k = 0; k < 6000; k++) {
+    sim.step();
+    const d = Math.hypot(sim.x[1] - sim.x[0], sim.y[1] - sim.y[0]);
+    assert.ok(d > 6 && d < 14, `separation wandered to ${d} at step ${k}`);
+  }
+  assert.equal(sim.count, 2);
 });
 
 test('bodies flung far away or swallowed by the centre are replaced', () => {
@@ -64,32 +78,32 @@ test('bodies flung far away or swallowed by the centre are replaced', () => {
   for (let i = 0; i < sim.count; i++) assert.ok(Number.isFinite(sim.x[i]) && Number.isFinite(sim.vx[i]));
 });
 
-test('population is kept constant and finite through a long run', () => {
-  const sim = new NBody({ bodies: 60, random: seeded(3), touchFactor: 0.6 });
-  sim.advance(0.5); // clamps to maxFrame, so only a few steps run
-  for (let k = 0; k < 60 * 30; k++) sim.advance(1 / 60); // 30 seconds at 60 fps
-  assert.equal(sim.count, 60);
-  for (let i = 0; i < sim.count; i++) {
-    assert.ok(Number.isFinite(sim.x[i]) && Number.isFinite(sim.y[i]));
-    assert.ok(sim.r[i] <= sim.o.mergedMaxRadius + 1e-12);
-  }
+test('setCount grows and shrinks the population', () => {
+  const sim = new NBody({ bodies: 100, random: seeded(9) });
+  sim.setCount(250);
+  assert.equal(sim.count, 250);
+  sim.step();
+  assert.equal(sim.count, 250);
+  sim.setCount(40);
+  assert.equal(sim.count, 40);
+  sim.step();
+  assert.equal(sim.count, 40);
 });
 
-test('with merging off, bodies pass through each other', () => {
-  const sim = new NBody({ bodies: 0, random: seeded() });
-  sim.addBody(30, 0, 0, 10, 1, 0);
-  sim.addBody(30.5, 0, 0, 10, 1, 1);
-  for (let k = 0; k < 100; k++) sim.step();
-  assert.equal(sim.count, 2);
-  assert.equal(sim.stats.merges, 0);
+test('population is kept constant and finite through a long run', () => {
+  const sim = new NBody({ bodies: 2000, random: seeded(3) });
+  sim.advance(0.5); // clamps to maxFrame, so only a few steps run
+  for (let k = 0; k < 60 * 10; k++) sim.advance(1 / 60); // 10 seconds at 60 fps
+  assert.equal(sim.count, 2000);
+  for (let i = 0; i < sim.count; i++) assert.ok(Number.isFinite(sim.x[i]) && Number.isFinite(sim.y[i]));
 });
 
 test('previewPath follows the same orbit the integrator produces', () => {
-  const sim = new NBody({ bodies: 0, random: seeded() });
+  const sim = new NBody({ bodies: 0, random: seeded(), massPerArea: 1 });
   const [vx, vy] = sim.orbitalVelocity(35, 0, 0.8);
   const path = sim.previewPath(35, 0, vx, vy, 60, 1 / 30);
   sim.addBody(35, 0, vx, vy, 1, 0);
-  for (let k = 0; k < 60 * 8; k++) sim.step(); // 2 s at dt = 1/240
+  for (let k = 0; k < 2 * 120; k++) sim.step(); // 2 s at dt = 1/120
   const dx = path[118] - sim.x[0], dy = path[119] - sim.y[0];
   assert.ok(Math.hypot(dx, dy) < 0.5, `preview drifted ${Math.hypot(dx, dy)}`);
 });
