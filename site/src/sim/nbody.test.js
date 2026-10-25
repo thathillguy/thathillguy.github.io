@@ -127,7 +127,7 @@ test('a black hole under the pointer pulls bodies in, swallows them, and can be 
   for (let i = 0; i < sim.n; i++) if (sim.home[i] === 0) { ax += sim.ax[i]; cnt++; }
   assert.ok(ax / cnt > 0, 'bodies are pulled toward +x where the hole is');
   for (let k = 0; k < 120 * 8; k++) sim.step();
-  assert.ok(sim.stats.swallowed > 20, `swallowed ${sim.stats.swallowed}`);
+  assert.ok(sim.stats.swallowed > 5, `swallowed ${sim.stats.swallowed}`);
   assert.equal(sim.count, 2000, 'swallowed bodies are replaced');
   assert.equal(sim.cx[sim.hole], hx, 'the hole does not move');
   sim.clearHole();

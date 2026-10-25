@@ -17,8 +17,8 @@ export const DEFAULTS = {
   softening: 1,          // Plummer softening for body-body forces
   separation: 110,       // starting distance between the two cores (their apoapsis)
   periapsis: 25,         // closest approach of the cores' mutual orbit
-  holeMass: 4500,        // the black hole placed under the pointer
-  holeSoftening: 2.5,
+  holeMass: 1500,        // the black hole placed under the pointer (a nebula core is 2100)
+  holeSoftening: 3,
   holeRadius: 1.4,       // bodies inside this are swallowed (and respawn in a nebula)
   massPerArea: null,     // body mass per radius^2; derived from the masses above unless set (tests)
   minRadius: 0.12,       // drawn radius; ~1px on a laptop
