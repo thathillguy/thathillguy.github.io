@@ -1,77 +1,51 @@
-// N-body gravity with a Barnes-Hut quadtree. No DOM, no React: runs in a Web Worker and under `node --test`.
+// Two nebulae of stars on a collision course, under softened Newtonian gravity.
 //
-// Two nebulae, each a disc of small bodies around an unseen core, on an eccentric mutual orbit.
+// This module is the reference simulation: the CPU holds every body and integrates with a
+// Barnes-Hut quadtree. In browsers with WebGPU the integration runs on the GPU instead
+// (see gpu.js), using this class for the setup, the cores, and the housekeeping.
+//
 // Units: distance in "sim units", where the shorter side of the viewport spans 100 units;
 // time in seconds; G = 1. Coordinates follow the screen: origin at the centre, y grows downward.
-
-import { walkRange, EMPTY, INTERNAL, CROWD } from './walk.js';
+//
+// A star's drawn disc is a symbol. Its real radius is negligible next to its spacing, so stars
+// never touch: the dynamics are collisionless gravity, which is what galaxy encounters are.
 
 export const COLOURS = ['#E24e42', '#e9b000', '#EB6E80', '#008F95'];
-export const BLACK = 4; // colour index of a collapsed body
-
-// Arrays live in SharedArrayBuffers when the environment has them, so worker threads can walk
-// the same tree without copying. Plain ArrayBuffers otherwise; the physics is identical.
-const shared = () => typeof SharedArrayBuffer !== 'undefined' && (typeof crossOriginIsolated === 'undefined' || crossOriginIsolated);
-const f64 = (n) => new Float64Array(shared() ? new SharedArrayBuffer(n * 8) : n);
-const i32 = (n) => new Int32Array(shared() ? new SharedArrayBuffer(n * 4) : n);
-const u8 = (n) => new Uint8Array(n);
 const NEBULA_COLOURS = [[0, 1], [2, 3]]; // each nebula draws from its own pair
 
 export const DEFAULTS = {
-  bodies: 6000,          // number of bodies the sim keeps alive, shared between the nebulae
-  nebulae: 2,
-  nebulaMass: 3000,      // each, unseen core plus bodies
-  coreFraction: 0.7,     // share of nebulaMass sitting in the unseen core
+  bodies: 50000,
+  nebulaMass: 3000,      // each: unseen core plus stars
+  coreFraction: 0.7,     // share of nebulaMass in the unseen core (a dark halo, in effect)
   nebulaRadius: 34,      // disc radius in sim units
-  profile: 0.8,          // body radius within a nebula is R * u^profile: lower is denser at the core
-  coreSoftening: 5,      // Plummer softening of the cores (keeps them from slingshotting bodies)
-  softening: 1,          // Plummer softening for body-body forces
+  profile: 0.8,          // star radius within a nebula is R * u^profile: lower is denser at the core
+  coreSoftening: 5,      // Plummer softening of the cores
+  softening: 1,          // Plummer softening between stars
   separation: 110,       // starting distance between the two cores (their apoapsis)
   periapsis: 25,         // closest approach of the cores' mutual orbit
-  holeMass: null,        // the pointer's black hole; null = whatever mass gives it holeHorizon at this c
-  holeHorizon: 1.4,      // Schwarzschild radius of the pointer's hole, in sim units
+  minRadius: 0.03,       // drawn radius of a star, in sim units (well under a pixel)
+  maxRadius: 0.09,
+  holeMass: 1500,        // the black hole placed under the pointer
   holeSoftening: 3,
-  lightSpeed: null,      // c, sim units per second (G = 1); null = set so a body holding
-  collapseFraction: 1,   //   this share of all body mass collapses into a black hole (1 = effectively never)
-  // Collision cross-section as a multiple of the drawn radii. The drawn disc is a symbol: a star's
-  // real radius is negligible next to its spacing, so stars never touch (0, collisionless). For
-  // planetesimals the drawn size is the physical size (1): contact merges or shatters.
-  touchFactor: 0,
-  replaceMerged: false,  // true keeps the population by letting a fresh body in at a nebula's rim per merge
-  stickSpeed: 2.5,       // impacts slower than this (relative speed) simply combine
-  shatterSpeed: 10,      // by this relative speed the impact is at full intensity
-  fragmentFraction: 0.35,// at full intensity this share of the smaller body's mass is thrown off (0 = never)
-  fragmentEnergy: 0.5,   // at most this share of the kinetic energy the merge destroys goes into fragments
-  fragmentMinSpeed: 0.8, // fragments that could not get clear are not made
-  eatRatio: 0.1,         // a body lighter than this fraction of the other is simply eaten, however hard it hits
-  fullRatio: 0.4,        // from this mass ratio up, fragmentation is at full strength
-  density: null,         // mass = density * radius^radiusExponent; derived from the masses above unless set
-  radiusExponent: 3,     // 3: radius grows with the cube root of mass, like a solid ball
-  minRadius: 0.05,       // drawn radius; well under a pixel to ~1.3 px on a laptop
-  maxRadius: 0.16,
-  theta: 1.0,            // Barnes-Hut opening angle; lower is more accurate and slower (0.8% rms error here)
+  lightSpeed: 46,        // c, sim units per second (G = 1): sets the hole's Schwarzschild radius
+  theta: 1.0,            // Barnes-Hut opening angle (0.8% rms force error)
   dt: 1 / 120,           // fixed physics step
   maxFrame: 0.05,        // most real time absorbed by one advance() call
   halfW: 80,             // visible half-extents, in sim units (see setViewport)
   halfH: 50,
   random: Math.random,
+  prime: true,           // compute the initial accelerations (false when a GPU engine will)
 };
 
+const EMPTY = -1, INTERNAL = -2, CROWD = -3; // quadtree leaf states
 const MAX_DEPTH = 24;
-const POOL_MAX = 16; // touching-pair regions are reserved for up to this many walkers
-let shareGeneration = 0; // global, so workers never confuse one sim's buffers with another's
 
 /** Schwarzschild radius of a mass m: 2 G m / c^2, with G = 1. */
 export function schwarzschildRadius(m, c) {
   return (2 * m) / (c * c);
 }
 
-/** The speed of light at which a body of mass m and radius r sits exactly on its horizon. */
-export function collapseLightSpeed(m, r) {
-  return Math.sqrt((2 * m) / r);
-}
-
-/** Speed of a circular orbit at distance rho around a core of mass m with Plummer softening e. */
+/** Speed of a circular orbit at distance rho around a mass m with Plummer softening e. */
 export function circularSpeed(m, e, rho) {
   const d2 = rho * rho + e * e;
   return rho * Math.sqrt(m / (d2 * Math.sqrt(d2)));
@@ -84,118 +58,74 @@ export class NBody {
     this.halfW = this.o.halfW;
     this.halfH = this.o.halfH;
     this.time = 0;
-    this.stats = { escaped: 0, swallowed: 0, merges: 0, collapses: 0, steps: 0, nodes: 0 };
-    this.hole = null;
-    this._touching = [];
+    this.stats = { escaped: 0, swallowed: 0, steps: 0 };
     this._acc = 0;
     this.n = 0;
-    this._alloc(Math.max(64, this.o.bodies * 2));
+    this._alloc(Math.max(64, Math.ceil(this.o.bodies * 1.1)));
     this._stack = new Int32Array(4096);
     this._initCores();
-    this.density = this.o.density ?? 1; // provisional until the population exists
-    for (let i = 0; i < this.o.bodies; i++) this._spawnInNebula(i % this.nebulaCount);
-    if (this.o.density == null) {
-      let sum = 0;
-      for (let i = 0; i < this.n; i++) sum += Math.pow(this.r[i], this.o.radiusExponent);
-      const bodyMass = this.k * this.o.nebulaMass * (1 - this.o.coreFraction);
-      this.density = sum > 0 ? bodyMass / sum : 1;
-      for (let i = 0; i < this.n; i++) this.m[i] = this.massOf(this.r[i]);
-    }
-    this._balanceCores();
-    this._setConstants();
-    this._accelerate();
-  }
-
-  /** Choose c (and the pointer hole's mass) from the body mass present, unless given explicitly. */
-  _setConstants() {
-    let total = 0;
-    for (let i = 0; i < this.n; i++) total += this.m[i];
-    const critical = this.o.collapseFraction * total;
-    if (this.o.lightSpeed == null) {
-      this.o.lightSpeed = critical > 0 ? collapseLightSpeed(critical, this.radiusOf(critical)) : 46;
-    }
-    if (this.o.holeMass == null) {
-      this.o.holeMass = (this.o.holeHorizon * this.o.lightSpeed ** 2) / 2;
-    }
+    for (let i = 0; i < this.o.bodies; i++) this._spawn(i % 2);
+    // star masses: m = density * r^3, with the density set by the mass budget
+    let sum = 0;
+    for (let i = 0; i < this.n; i++) sum += this.r[i] ** 3;
+    this.density = sum > 0 ? (2 * this.o.nebulaMass * (1 - this.o.coreFraction)) / sum : 1;
+    for (let i = 0; i < this.n; i++) this.m[i] = this.density * this.r[i] ** 3;
+    this._balanceMomentum();
+    if (this.o.prime) this._accelerate();
   }
 
   _alloc(cap) {
     this.cap = cap;
-    // All 64-bit: 32-bit storage measured slower in V8 (each load converts to a double) and
-    // rounding the accelerations breaks the exact pairwise symmetry that conserves momentum.
-    for (const k of ['x', 'y', 'vx', 'vy', 'ax', 'ay', 'r', 'm']) this[k] = f64(cap);
-    this.colour = u8(cap);
-    this.home = u8(cap);
-    this.black = u8(cap); // 1 for a body that has collapsed into a black hole
-    this._dead = u8(cap);
-    this._keys = new Float64Array(cap);   // Morton code * 2^20 + index, for sorting
+    for (const k of ['x', 'y', 'vx', 'vy', 'ax', 'ay', 'r', 'm']) this[k] = new Float64Array(cap);
+    this.colour = new Uint8Array(cap);
+    this.home = new Uint8Array(cap);
+    this._dead = new Uint8Array(cap);
+    this._keys = new Float64Array(cap);
     this._scratch = new Float64Array(cap);
     this._scratch8 = new Uint8Array(cap);
-    // touching pairs: one region per walker (region 0 doubles as the single-thread region)
-    this._touchPer = 8 * Math.ceil(cap / 4) + 1024;
-    this._touching = i32(this._touchPer * POOL_MAX);
-    this._touchCount = 0;
-    this._ctrl = i32(4); // shared chunk counter for the pool
     this._allocTree(cap * 4 + 64);
-    this._shareGen = ++shareGeneration;
   }
 
   _allocTree(cap) {
     this.treeCap = cap;
-    this.nx = f64(cap);   // cell centre
-    this.ny = f64(cap);
-    this.nh = f64(cap);   // cell half-size
-    this.nm = f64(cap);   // mass in cell
-    this.ncx = f64(cap);  // centre of mass (sum m*x during the build)
-    this.ncy = f64(cap);
-    this.nrmax = f64(cap); // largest body radius in the cell
-    this.nleaf = i32(cap);  // body index, or EMPTY / INTERNAL / CROWD
-    this.nchild = i32(cap * 4);
-    this._shareGen = ++shareGeneration;
-  }
-
-  _grow() {
-    const old = { x: this.x, y: this.y, vx: this.vx, vy: this.vy, ax: this.ax, ay: this.ay, r: this.r, m: this.m, colour: this.colour, home: this.home, black: this.black };
-    this._alloc(this.cap * 2);
-    for (const k of Object.keys(old)) this[k].set(old[k]);
+    for (const k of ['nx', 'ny', 'nh', 'nm', 'ncx', 'ncy']) this[k] = new Float64Array(cap);
+    this.nleaf = new Int32Array(cap);
+    this.nchild = new Int32Array(cap * 4);
   }
 
   // ---- cores -----------------------------------------------------------------------------------
 
-  /** The unseen cores: one per nebula, on a bound eccentric orbit about their common centre. */
+  /** Two unseen cores on a bound eccentric orbit about their common centre, plus room for the hole. */
   _initCores() {
-    const k = (this.k = Math.max(1, this.o.nebulae | 0));
-    this.nebulaCount = k;
-    const cap = k + 4; // room for a black hole or two
-    for (const name of ['cx', 'cy', 'cvx', 'cvy', 'cax', 'cay', 'cm', 'ce2', 'cabsorb', 'spin']) this[name] = new Float64Array(cap);
-    this.cpinned = new Uint8Array(cap);
+    this.k = 2;
+    for (const name of ['cx', 'cy', 'cvx', 'cvy', 'cax', 'cay', 'cm', 'ce2', 'spin']) this[name] = new Float64Array(3);
+    this.cpinned = new Uint8Array(3);
     const { nebulaMass, coreFraction, periapsis, coreSoftening } = this.o;
-    this.cm.fill(nebulaMass * coreFraction, 0, k);
-    this.ce2.fill(coreSoftening * coreSoftening, 0, k);
-    if (k === 1) { this.spin[0] = 1; return; }
+    this.cm.fill(nebulaMass * coreFraction, 0, 2);
+    this.ce2.fill(coreSoftening * coreSoftening, 0, 2);
     // lay them along the viewport's long axis, not further apart than the view can show
     const sep = Math.min(this.o.separation, 1.1 * Math.max(this.halfW, this.halfH));
     const along = this.halfW >= this.halfH ? [1, 0] : [0, 1];
     const across = [-along[1], along[0]];
-    const total = k * nebulaMass; // bodies ride with their cores, so they count toward the orbit
+    const total = 2 * nebulaMass; // stars ride with their cores, so they count toward the orbit
     const rp = Math.min(periapsis, sep);
     const vRel = Math.sqrt(total * Math.max(0, 2 / sep - 2 / (sep + rp))); // vis-viva at apoapsis
-    for (let c = 0; c < k; c++) {
-      const s = (c - (k - 1) / 2) * sep;            // -sep/2, +sep/2
+    for (let c = 0; c < 2; c++) {
+      const s = (c - 0.5) * sep;
       this.cx[c] = along[0] * s;
       this.cy[c] = along[1] * s;
-      const v = (c === 0 ? -1 : 1) * vRel / k;
+      const v = (c === 0 ? -1 : 1) * vRel / 2;
       this.cvx[c] = across[0] * v;
       this.cvy[c] = across[1] * v;
-      this.spin[c] = c % 2 === 0 ? 1 : -1;            // one prograde, one retrograde: classic tails
+      this.spin[c] = c === 0 ? 1 : -1; // one prograde, one retrograde: classic tidal tails
     }
+    this.hole = null;
   }
 
-  // Random orbital velocities never sum to exactly zero: let each core absorb its disc's residual
-  // momentum so every nebula, and the system, starts with the momentum its orbit was designed for.
-  _balanceCores() {
-    for (let c = 0; c < this.nebulaCount; c++) {
-      if (this.cm[c] <= 0) continue;
+  // Random orbital velocities never sum to exactly zero: let each core absorb its disc's residual,
+  // then remove whatever is left with a common shift, so the system starts exactly at rest.
+  _balanceMomentum() {
+    for (let c = 0; c < 2; c++) {
       let px = 0, py = 0;
       for (let i = 0; i < this.n; i++) {
         if (this.home[i] !== c) continue;
@@ -205,36 +135,12 @@ export class NBody {
       this.cvx[c] -= px / this.cm[c];
       this.cvy[c] -= py / this.cm[c];
     }
-    // The discs do not weigh exactly the same, so remove whatever net momentum is left by a
-    // common velocity shift: the system's centre of mass then stays put.
     let px = 0, py = 0, mass = 0;
     for (let i = 0; i < this.n; i++) { px += this.m[i] * this.vx[i]; py += this.m[i] * this.vy[i]; mass += this.m[i]; }
     for (let c = 0; c < this.k; c++) { px += this.cm[c] * this.cvx[c]; py += this.cm[c] * this.cvy[c]; mass += this.cm[c]; }
-    if (mass <= 0) return;
     const sx = px / mass, sy = py / mass;
     for (let i = 0; i < this.n; i++) { this.vx[i] -= sx; this.vy[i] -= sy; }
     for (let c = 0; c < this.k; c++) { this.cvx[c] -= sx; this.cvy[c] -= sy; }
-  }
-
-  /** Walk the tree on a pool of worker threads from now on (requires shared memory). */
-  setPool(pool) {
-    this.pool = pool;
-    this._shareGenSent = -1;
-  }
-
-  /** Compute body-body forces on the GPU from now on (all pairs, no tree). */
-  setGpu(gpu) {
-    this.gpu = gpu;
-  }
-
-  /** The buffers a walker needs, for posting to workers. */
-  sharedBuffers() {
-    const b = (a) => a.buffer;
-    return {
-      x: b(this.x), y: b(this.y), r: b(this.r), ax: b(this.ax), ay: b(this.ay),
-      nx: b(this.nx), ny: b(this.ny), nh: b(this.nh), nm: b(this.nm), ncx: b(this.ncx), ncy: b(this.ncy), nrmax: b(this.nrmax),
-      nleaf: b(this.nleaf), nchild: b(this.nchild), ctrl: b(this._ctrl), touch: b(this._touching),
-    };
   }
 
   /** Visible half-width and half-height in sim units; respawning and escape use them. */
@@ -258,7 +164,6 @@ export class NBody {
       const c = (this.hole = this.k++);
       this.cm[c] = this.o.holeMass;
       this.ce2[c] = this.o.holeSoftening * this.o.holeSoftening;
-      this.cabsorb[c] = this.holeRadius; // the event horizon: nothing inside comes back
       this.cpinned[c] = 1;
       this.cvx[c] = 0; this.cvy[c] = 0; this.cax[c] = 0; this.cay[c] = 0;
     }
@@ -269,105 +174,53 @@ export class NBody {
   /** Remove the black hole, if there is one. */
   clearHole() {
     if (this.hole == null) return;
-    const c = this.hole;
-    const last = --this.k;
-    if (c !== last) {
-      for (const a of [this.cx, this.cy, this.cvx, this.cvy, this.cax, this.cay, this.cm, this.ce2, this.cabsorb, this.spin]) a[c] = a[last];
-      this.cpinned[c] = this.cpinned[last];
-    }
-    this.cpinned[last] = 0;
-    this.cabsorb[last] = 0;
+    this.k--;
+    this.cpinned[this.hole] = 0;
     this.hole = null;
   }
 
-  /** Change how many bodies the sim keeps alive. Extra bodies spawn in place; surplus ones vanish. */
-  setCount(target) {
-    target = Math.max(0, Math.floor(target));
-    this.o.bodies = target;
-    while (this.n > target) this.n--;
-    while (this.n < target) this._spawnInNebula(this.n % this.nebulaCount);
-  }
+  // ---- stars -------------------------------------------------------------------------------------
 
-  /** Mass of a body of the given radius, and the radius a body of the given mass draws at. */
-  massOf(radius) { return this.density * Math.pow(radius, this.o.radiusExponent); }
-  radiusOf(mass) { return Math.pow(mass / this.density, 1 / this.o.radiusExponent); }
-
-  addBody(x, y, vx, vy, radius, colourIndex, home = 0) {
-    if (this.n === this.cap) this._grow();
+  addBody(x, y, vx, vy, radius, colourIndex, home) {
     const i = this.n++;
     this.x[i] = x; this.y[i] = y;
     this.vx[i] = vx; this.vy[i] = vy;
     this.ax[i] = 0; this.ay[i] = 0;
     this.r[i] = radius;
-    this.m[i] = this.massOf(radius);
+    this.m[i] = (this.density ?? 1) * radius ** 3;
     this.colour[i] = colourIndex;
     this.home[i] = home;
-    this.black[i] = 0;
     return i;
-  }
-
-  _randomRadius() {
-    const { minRadius, maxRadius } = this.o;
-    return minRadius + (maxRadius - minRadius) * this.random();
   }
 
   /** Circular speed at distance rho from a core, counting the disc mass inside rho. */
   _discSpeed(c, rho) {
-    const { nebulaMass, coreFraction, coreSoftening, nebulaRadius } = this.o;
-    const enclosed = Math.min(1, Math.pow(rho / nebulaRadius, 1 / this.o.profile));
+    const { nebulaMass, coreFraction, coreSoftening, nebulaRadius, profile } = this.o;
+    const enclosed = Math.min(1, Math.pow(rho / nebulaRadius, 1 / profile));
     const discMass = nebulaMass * (1 - coreFraction) * enclosed;
     const vCore = circularSpeed(this.cm[c], coreSoftening, rho);
     return Math.sqrt(vCore * vCore + discMass / Math.max(rho, 0.5));
   }
 
-  // A body in nebula c's disc, on a near-circular orbit about its core, riding with the core.
-  _spawnInNebula(c) {
-    const rho = this.o.nebulaRadius * Math.pow(this.random(), this.o.profile) + 0.3;
+  // A star in nebula c's disc (or, with `rim`, just at its edge, drifting inward), on a
+  // near-circular orbit about its core, riding with the core.
+  _spawn(c, rim = false) {
+    const R = this.o.nebulaRadius;
+    const rho = rim ? R * (0.85 + 0.2 * this.random()) : R * Math.pow(this.random(), this.o.profile) + 0.3;
     const t = 2 * Math.PI * this.random();
     const ux = Math.cos(t), uy = Math.sin(t);
-    const v = this.spin[c] * this._discSpeed(c, rho) * (0.96 + 0.08 * this.random());
-    const pair = NEBULA_COLOURS[c % NEBULA_COLOURS.length];
-    this.addBody(
-      this.cx[c] + rho * ux, this.cy[c] + rho * uy,
-      this.cvx[c] - uy * v, this.cvy[c] + ux * v,
-      this._randomRadius(), pair[(this.n >> 1) & 1], c,
-    );
+    const factor = rim ? 0.9 + 0.08 * this.random() : 0.96 + 0.08 * this.random();
+    const v = this.spin[c] * this._discSpeed(c, rho) * factor;
+    const { minRadius, maxRadius } = this.o;
+    const radius = minRadius + (maxRadius - minRadius) * this.random();
+    const pair = NEBULA_COLOURS[c];
+    this.addBody(this.cx[c] + rho * ux, this.cy[c] + rho * uy, this.cvx[c] - uy * v, this.cvy[c] + ux * v, radius, pair[(this.n >> 1) & 1], c);
   }
 
-  // A fresh small body at the outer edge of nebula c, slightly sub-circular so it drifts inward.
-  _spawnAtNebulaRim(c) {
-    const rho = this.o.nebulaRadius * (0.85 + 0.2 * this.random());
-    const t = 2 * Math.PI * this.random();
-    const ux = Math.cos(t), uy = Math.sin(t);
-    const v = this.spin[c] * this._discSpeed(c, rho) * (0.9 + 0.08 * this.random());
-    const pair = NEBULA_COLOURS[c % NEBULA_COLOURS.length];
-    this.addBody(
-      this.cx[c] + rho * ux, this.cy[c] + rho * uy,
-      this.cvx[c] - uy * v, this.cvy[c] + ux * v,
-      this._randomRadius(), pair[(this.n >> 1) & 1], c,
-    );
-  }
+  // ---- forces (reference, Barnes-Hut) ------------------------------------------------------------
 
-  // ---- Barnes-Hut quadtree over the bodies (cores are handled directly) ------------------------
-
-  _newNode(cx, cy, h) {
-    if (this.nodes === this.treeCap) {
-      const { nx, ny, nh, nm, ncx, ncy, nrmax, nleaf, nchild } = this;
-      this._allocTree(this.treeCap * 2);
-      this.nx.set(nx); this.ny.set(ny); this.nh.set(nh); this.nm.set(nm);
-      this.ncx.set(ncx); this.ncy.set(ncy); this.nrmax.set(nrmax); this.nleaf.set(nleaf); this.nchild.set(nchild);
-    }
-    const k = this.nodes++;
-    this.nx[k] = cx; this.ny[k] = cy; this.nh[k] = h;
-    this.nm[k] = 0; this.ncx[k] = 0; this.ncy[k] = 0; this.nrmax[k] = 0;
-    this.nleaf[k] = EMPTY;
-    const c = k * 4;
-    this.nchild[c] = this.nchild[c + 1] = this.nchild[c + 2] = this.nchild[c + 3] = -1;
-    return k;
-  }
-
-  // Reorder the bodies along a Z-order (Morton) curve so that neighbours in space are
-  // neighbours in memory: the tree then builds and walks with far fewer cache misses.
+  // Reorder the stars along a Z-order (Morton) curve so neighbours in space are neighbours in
+  // memory: the tree then builds and walks with fewer cache misses. Every few steps is enough.
   _sortMorton(minX, minY, span) {
     const { n, x, y } = this;
     const keys = this._keys;
@@ -385,14 +238,28 @@ export class NBody {
       for (let i = 0; i < n; i++) tmp[i] = arr[view[i] % 1048576];
       arr.set(tmp.subarray(0, n));
     }
-    for (const arr of [this.colour, this.home, this.black]) {
+    for (const arr of [this.colour, this.home]) {
       for (let i = 0; i < n; i++) tmp8[i] = arr[view[i] % 1048576];
       arr.set(tmp8.subarray(0, n));
     }
   }
 
+  _newNode(cx, cy, h) {
+    if (this.nodes === this.treeCap) {
+      const old = { nx: this.nx, ny: this.ny, nh: this.nh, nm: this.nm, ncx: this.ncx, ncy: this.ncy, nleaf: this.nleaf, nchild: this.nchild };
+      this._allocTree(this.treeCap * 2);
+      for (const k of Object.keys(old)) this[k].set(old[k]);
+    }
+    const k = this.nodes++;
+    this.nx[k] = cx; this.ny[k] = cy; this.nh[k] = h;
+    this.nm[k] = 0; this.ncx[k] = 0; this.ncy[k] = 0;
+    this.nleaf[k] = EMPTY;
+    this.nchild.fill(-1, k * 4, k * 4 + 4);
+    return k;
+  }
+
   _buildTree() {
-    const { n, x, y, m, r } = this;
+    const { n, x, y, m } = this;
     this.nodes = 0;
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (let i = 0; i < n; i++) {
@@ -402,14 +269,12 @@ export class NBody {
     if (n > 64 && this.stats.steps % 8 === 0) this._sortMorton(minX, minY, Math.max(maxX - minX, maxY - minY, 1e-9));
     const half = Math.max(maxX - minX, maxY - minY, 1) * 0.5 * 1.001 + 1e-6;
     const root = this._newNode((minX + maxX) / 2, (minY + maxY) / 2, half);
-    const { nx, ny, nh, nm, ncx, ncy, nrmax, nleaf, nchild } = this;
-
+    const { nx, ny, nh, nm, ncx, ncy, nleaf, nchild } = this;
     for (let i = 0; i < n; i++) {
-      const xi = x[i], yi = y[i], mi = m[i], ri = r[i];
+      const xi = x[i], yi = y[i], mi = m[i];
       let node = root, depth = 0;
       for (;;) {
         nm[node] += mi; ncx[node] += mi * xi; ncy[node] += mi * yi;
-        if (ri > nrmax[node]) nrmax[node] = ri;
         const leaf = nleaf[node];
         if (leaf === EMPTY) { nleaf[node] = i; break; }
         if (leaf === CROWD) break;
@@ -421,7 +286,7 @@ export class NBody {
           const h = nh[node] * 0.5;
           const child = this._newNode(nx[node] + (q & 1 ? h : -h), ny[node] + (q & 2 ? h : -h), h);
           nchild[node * 4 + q] = child;
-          nm[child] = m[j]; ncx[child] = m[j] * x[j]; ncy[child] = m[j] * y[j]; nrmax[child] = r[j];
+          nm[child] = m[j]; ncx[child] = m[j] * x[j]; ncy[child] = m[j] * y[j];
           nleaf[child] = j;
         }
         const q = (xi > nx[node] ? 1 : 0) + (yi > ny[node] ? 2 : 0);
@@ -438,14 +303,55 @@ export class NBody {
     for (let k = 0; k < this.nodes; k++) {
       if (nm[k] > 0) { ncx[k] /= nm[k]; ncy[k] /= nm[k]; }
     }
-    this.stats.nodes = this.nodes;
   }
 
-  // Core forces (exact) and the tree build; the body-body walk follows, serial or on the pool.
-  _prepareForces(buildTree = true) {
-    const { n, k, x, y, ax, ay, m, cx, cy, cax, cay, cm, ce2 } = this;
+  /** Accelerations on cores (from everything) and on stars (cores exactly, stars via the tree). */
+  _accelerate() {
+    this._coreForces();
+    if (this.n < 2) return;
+    this._buildTree();
+    const { n, x, y, ax, ay, nx, ny, nh, nm, ncx, ncy, nleaf, nchild } = this;
+    const eps2 = this.o.softening ** 2, theta2 = this.o.theta ** 2;
+    const stack = this._stack;
+    for (let i = 0; i < n; i++) {
+      const xi = x[i], yi = y[i];
+      let axi = 0, ayi = 0, sp = 0;
+      stack[sp++] = 0;
+      while (sp > 0) {
+        const node = stack[--sp];
+        const leaf = nleaf[node];
+        if (leaf === i) continue;
+        const dx = ncx[node] - xi, dy = ncy[node] - yi;
+        const d2 = dx * dx + dy * dy;
+        let open = false;
+        if (leaf === INTERNAL) {
+          // a cell that contains this star must be opened: its lump would include the star itself
+          const h = nh[node];
+          const inside = xi > nx[node] - h && xi <= nx[node] + h && yi > ny[node] - h && yi <= ny[node] + h;
+          const s = 2 * h;
+          open = inside || s * s >= theta2 * d2;
+        }
+        if (!open) {
+          const q = d2 + eps2;
+          const f = nm[node] / (q * Math.sqrt(q));
+          axi += f * dx;
+          ayi += f * dy;
+        } else {
+          const c = node * 4;
+          for (let j = 0; j < 4; j++) {
+            const ch = nchild[c + j];
+            if (ch >= 0 && nleaf[ch] !== EMPTY) stack[sp++] = ch;
+          }
+        }
+      }
+      ax[i] += axi;
+      ay[i] += ayi;
+    }
+  }
 
-    // cores <-> cores, and cores <-> bodies (exact, pairwise, momentum-conserving)
+  /** Core <-> core and core <-> star forces, exact and pairwise. Resets star accelerations. */
+  _coreForces() {
+    const { n, k, x, y, ax, ay, m, cx, cy, cax, cay, cm, ce2 } = this;
     for (let c = 0; c < k; c++) { cax[c] = 0; cay[c] = 0; }
     for (let a = 0; a < k; a++) {
       for (let b = a + 1; b < k; b++) {
@@ -468,51 +374,12 @@ export class NBody {
       }
       ax[i] = axi; ay[i] = ayi;
     }
-    this._touchCount = 0;
-    if (n < 2) return false;
-    if (buildTree) this._buildTree();
-    return true;
   }
 
-  _walkViews() {
-    return {
-      x: this.x, y: this.y, r: this.r, ax: this.ax, ay: this.ay,
-      nx: this.nx, ny: this.ny, nh: this.nh, nm: this.nm, ncx: this.ncx, ncy: this.ncy, nrmax: this.nrmax,
-      nleaf: this.nleaf, nchild: this.nchild,
-      theta2: this.o.theta * this.o.theta, eps2: this.o.softening * this.o.softening, touchFactor: this.o.touchFactor,
-    };
-  }
-
-  /** Forces on one thread. */
-  _accelerate() {
-    if (!this._prepareForces()) return;
-    this._touchCount = walkRange(this._walkViews(), 0, this.n, this._stack, this._touching, 0, this._touchPer);
-  }
-
-  /** Forces with the body-body part on the GPU, or the tree walk spread over the worker pool. */
-  async _accelerateAsync() {
-    if (this.gpu) {
-      if (!this._prepareForces(false)) return;
-      await this.gpu.accelerate(this);
-      return;
-    }
-    if (!this._prepareForces()) return;
-    const regions = await this.pool.walk(this);
-    // gather each walker's touching pairs into region 0 (they are disjoint by construction)
-    const t = this._touching;
-    let at = 0;
-    for (const [start, count] of regions) {
-      if (start !== at) t.copyWithin(at, start, start + count);
-      at += count;
-    }
-    this._touchCount = at;
-  }
-
-  /** Exact all-pairs body accelerations (cores included) into (outX, outY); tests only. */
+  /** Exact all-pairs star accelerations (cores included) into (outX, outY); tests only. */
   _accelerateDirect(outX, outY) {
     const { n, k, x, y, m, cx, cy, cm, ce2 } = this;
-    const { softening } = this.o;
-    const eps2 = softening * softening;
+    const eps2 = this.o.softening ** 2;
     for (let i = 0; i < n; i++) {
       outX[i] = 0; outY[i] = 0;
       for (let c = 0; c < k; c++) {
@@ -535,46 +402,39 @@ export class NBody {
 
   // ---- integration -------------------------------------------------------------------------------
 
-  /** One fixed step of velocity Verlet (kick, drift, kick) for bodies and cores, then escapes. */
+  /** One fixed step of velocity Verlet (kick, drift, kick) for stars and cores, then housekeeping. */
   step() {
-    const h = this._beginStep();
-    this._accelerate();
-    this._finishStep(h);
-  }
-
-  /** The same step, with the body-body forces on the GPU or the worker pool. */
-  async stepAsync() {
-    if (!this.pool && !this.gpu) { this.step(); return; }
-    const h = this._beginStep();
-    await this._accelerateAsync();
-    this._finishStep(h);
-  }
-
-  _beginStep() {
     const { dt } = this.o;
     const h = dt / 2;
-    const { x, y, vx, vy, ax, ay, k, cx, cy, cvx, cvy, cax, cay } = this;
+    const { x, y, vx, vy, ax, ay } = this;
     for (let i = 0; i < this.n; i++) {
       vx[i] += ax[i] * h; vy[i] += ay[i] * h;
       x[i] += vx[i] * dt; y[i] += vy[i] * dt;
     }
-    const pinned = this.cpinned;
+    this.driftCores(dt);
+    this._accelerate();
+    for (let i = 0; i < this.n; i++) { vx[i] += ax[i] * h; vy[i] += ay[i] * h; }
+    this.kickCores(h);
+    this.cull();
+    this.time += dt;
+    this.stats.steps++;
+  }
+
+  /** Cores: half-kick with the current accelerations, then drift. */
+  driftCores(dt) {
+    const { k, cx, cy, cvx, cvy, cax, cay, cpinned } = this;
+    const h = dt / 2;
     for (let c = 0; c < k; c++) {
-      if (pinned[c]) continue;
+      if (cpinned[c]) continue;
       cvx[c] += cax[c] * h; cvy[c] += cay[c] * h;
       cx[c] += cvx[c] * dt; cy[c] += cvy[c] * dt;
     }
-    return h;
   }
 
-  _finishStep(h) {
-    const { vx, vy, ax, ay, k, cvx, cvy, cax, cay } = this;
-    const pinned = this.cpinned;
-    for (let i = 0; i < this.n; i++) { vx[i] += ax[i] * h; vy[i] += ay[i] * h; }
-    for (let c = 0; c < k; c++) { if (!pinned[c]) { cvx[c] += cax[c] * h; cvy[c] += cay[c] * h; } }
-    this._cull();
-    this.time += this.o.dt;
-    this.stats.steps++;
+  /** Cores: the second half-kick. */
+  kickCores(h) {
+    const { k, cvx, cvy, cax, cay, cpinned } = this;
+    for (let c = 0; c < k; c++) { if (!cpinned[c]) { cvx[c] += cax[c] * h; cvy[c] += cay[c] * h; } }
   }
 
   /** Absorb the real time elapsed since the last call and run whole steps. */
@@ -586,126 +446,39 @@ export class NBody {
     }
   }
 
-  // Heavier body i absorbs j: mass and momentum add exactly; the radius follows from the mass.
-  // Gentle impacts just combine. Harder ones throw off one to three fragments whose share of the
-  // mass, and of the kinetic energy the inelastic merge destroys, grows with the impact intensity.
-  _merge(i, j) {
-    const { x, y, vx, vy, m, r, black } = this;
-    const mi = m[i], mj = m[j], total = mi + mj;
-    const rvx = vx[j] - vx[i], rvy = vy[j] - vy[i];
-    const vrel = Math.hypot(rvx, rvy);
-    x[i] = (x[i] * mi + x[j] * mj) / total;
-    y[i] = (y[i] * mi + y[j] * mj) / total;
-    vx[i] = (vx[i] * mi + vx[j] * mj) / total;
-    vy[i] = (vy[i] * mi + vy[j] * mj) / total;
-    let mass = total;
-    let made = 0; // fragments created
-    const isBlack = black[i] || black[j]; // a black hole swallows whole: nothing comes back out
-
-    const { stickSpeed, shatterSpeed, fragmentFraction, fragmentEnergy, fragmentMinSpeed, eatRatio, fullRatio } = this.o;
-    // Intensity grows with impact speed and fades as the masses diverge: a pebble hitting a boulder is eaten.
-    const speedPart = Math.min(1, Math.max(0, (vrel - stickSpeed) / Math.max(1e-9, shatterSpeed - stickSpeed)));
-    const ratio = Math.min(mi, mj) / Math.max(mi, mj);
-    const ratioPart = Math.min(1, Math.max(0, (ratio - eatRatio) / Math.max(1e-9, fullRatio - eatRatio)));
-    const intensity = isBlack ? 0 : speedPart * ratioPart;
-    if (fragmentFraction > 0 && intensity > 0) {
-      const lost = 0.5 * (mi * mj / total) * vrel * vrel;  // kinetic energy the merge destroys
-      const budget = lost * fragmentEnergy * intensity * (0.4 + 0.6 * this.random());
-      const ejected = fragmentFraction * intensity * Math.min(mi, mj);
-      const count = 1 + Math.floor(intensity * 2.999 * this.random());
-      // split the ejected mass unevenly among the fragments
-      const weights = []; let wsum = 0;
-      for (let f = 0; f < count; f++) { const w = 0.3 + this.random(); weights.push(w); wsum += w; }
-      const rest = total - ejected;
-      const recoil = 1 + ejected / rest; // energy the survivor's recoil will take, roughly
-      let dx0 = -rvy, dy0 = rvx;
-      const len = Math.hypot(dx0, dy0);
-      if (len < 1e-9) { const a = 2 * Math.PI * this.random(); dx0 = Math.cos(a); dy0 = Math.sin(a); } else { dx0 /= len; dy0 /= len; }
-      let pxf = 0, pyf = 0, massOut = 0;
-      for (let f = 0; f < count; f++) {
-        if (f === 0) made = 0;
-        const mf = ejected * weights[f] / wsum;
-        const ef = budget * weights[f] / wsum;
-        const speed = Math.sqrt((2 * ef) / (mf * recoil));
-        if (speed < fragmentMinSpeed) continue; // too slow to get clear: stays in the survivor
-        const side = f % 2 === 0 ? 1 : -1;
-        const a = (this.random() - 0.5) * 2.1, c = Math.cos(a), sn = Math.sin(a); // about +/- 60 degrees
-        const ux = side * (dx0 * c - dy0 * sn), uy = side * (dx0 * sn + dy0 * c);
-        const rf = this.radiusOf(mf);
-        const gap = this.radiusOf(rest) + rf + 0.15 + 0.6 * f;
-        const k = this.addBody(x[i] + ux * gap, y[i] + uy * gap, vx[i] + ux * speed, vy[i] + uy * speed, rf, this.colour[j], this.home[j]);
-        this.m[k] = mf;
-        pxf += mf * ux * speed; pyf += mf * uy * speed;
-        massOut += mf;
-        made++;
-      }
-      mass = total - massOut;
-      // recoil keeps momentum exact
-      vx[i] -= pxf / mass;
-      vy[i] -= pyf / mass;
-    }
-    m[i] = mass;
-    // Collapse: once the Schwarzschild radius reaches the body's own size, it is a black hole.
-    const rs = schwarzschildRadius(mass, this.o.lightSpeed);
-    if (isBlack || rs >= this.radiusOf(mass)) {
-      if (!black[i]) this.stats.collapses++;
-      black[i] = 1;
-      this.colour[i] = BLACK;
-      r[i] = rs;
-    } else {
-      r[i] = this.radiusOf(mass);
-    }
-    return made;
-  }
-
-  // Merge touching bodies, drop bodies flung far out of view or swallowed by a black hole,
-  // then top the population back up inside the nebulae.
-  _cull() {
-    const { x, y, r, m, colour, home } = this;
+  /**
+   * Stars that fell into the black hole or were flung far out of view are replaced at a nebula's
+   * rim. Returns the indices rewritten, for a GPU mirror to copy; null if nothing changed.
+   */
+  cull() {
+    const { x, y, n } = this;
     const dead = this._dead;
-    const far = 3 * Math.max(this.halfW, this.halfH);
-    const far2 = far * far;
-    let changed = false;
-    const t = this._touching;
-    for (let k = 0; k < this._touchCount; k += 2) {
-      let i = t[k], j = t[k + 1];
-      if (dead[i] || dead[j]) continue;
-      if (m[j] > m[i]) { const s = i; i = j; j = s; }
-      const made = this._merge(i, j);
-      dead[j] = 1;
-      this.stats.merges++;
-      // The population target follows the real change (one body gone, fragments added), so
-      // merging never triggers a respawn; set replaceMerged to refill from the rim instead.
-      if (!this.o.replaceMerged) this.o.bodies = Math.max(0, this.o.bodies - 1 + made);
-      changed = true;
-    }
-    for (let i = 0; i < this.n; i++) {
-      if (x[i] * x[i] + y[i] * y[i] > far2) { dead[i] = 1; this.stats.escaped++; changed = true; }
+    const far = 3 * Math.max(this.halfW, this.halfH), far2 = far * far;
+    let changed = 0;
+    for (let i = 0; i < n; i++) {
+      if (x[i] * x[i] + y[i] * y[i] > far2) { dead[i] = 1; this.stats.escaped++; changed++; }
     }
     if (this.hole != null) {
-      const c = this.hole, hx = this.cx[c], hy = this.cy[c], rr = this.cabsorb[c] * this.cabsorb[c];
-      for (let i = 0; i < this.n; i++) {
+      const c = this.hole, hx = this.cx[c], hy = this.cy[c], rr = this.holeRadius ** 2;
+      for (let i = 0; i < n; i++) {
         const dx = x[i] - hx, dy = y[i] - hy;
-        if (dx * dx + dy * dy < rr) { dead[i] = 1; this.stats.swallowed++; changed = true; }
+        if (!dead[i] && dx * dx + dy * dy < rr) { dead[i] = 1; this.stats.swallowed++; changed++; }
       }
     }
-    if (!changed) return;
-    let w = 0;
-    for (let i = 0; i < this.n; i++) {
-      if (dead[i]) { dead[i] = 0; continue; }
-      if (w !== i) {
-        x[w] = x[i]; y[w] = y[i];
-        this.vx[w] = this.vx[i]; this.vy[w] = this.vy[i];
-        this.ax[w] = this.ax[i]; this.ay[w] = this.ay[i];
-        r[w] = r[i]; m[w] = m[i]; colour[w] = colour[i]; home[w] = home[i]; this.black[w] = this.black[i];
-      }
-      w++;
+    if (!changed) return null;
+    const rewritten = [];
+    for (let i = 0; i < n; i++) {
+      if (!dead[i]) continue;
+      dead[i] = 0;
+      this.n = i;                       // respawn writes into slot i
+      this._spawn(this.home[i], true);
+      rewritten.push(i);
     }
-    this.n = w;
-    while (this.n < this.o.bodies) this._spawnAtNebulaRim(Math.floor(this.random() * this.nebulaCount));
+    this.n = n;
+    return rewritten;
   }
 
-  /** Total momentum of bodies and cores, for tests. */
+  /** Total momentum of stars and cores, for tests. */
   momentum() {
     let px = 0, py = 0;
     for (let i = 0; i < this.n; i++) { px += this.m[i] * this.vx[i]; py += this.m[i] * this.vy[i]; }
@@ -716,8 +489,7 @@ export class NBody {
   /** Total mechanical energy (kinetic + softened potential), exact; for tests only. */
   energy() {
     const { n, k, x, y, vx, vy, m, cx, cy, cvx, cvy, cm, ce2 } = this;
-    const { softening } = this.o;
-    const eps2 = softening * softening;
+    const eps2 = this.o.softening ** 2;
     let e = 0;
     for (let c = 0; c < k; c++) {
       e += 0.5 * cm[c] * (cvx[c] * cvx[c] + cvy[c] * cvy[c]);

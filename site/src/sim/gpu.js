@@ -1,21 +1,37 @@
-// WebGPU brute-force gravity: every body against every other, tiled through workgroup memory.
-// One pass yields both the body-body accelerations and the touching pairs. The CPU keeps the
-// authoritative 64-bit state; this only replaces the tree walk. Returns null where WebGPU is absent.
+// WebGPU engine: the stars live on the GPU and are integrated there with all-pairs gravity,
+// tiled through workgroup memory. The CPU keeps the cores (exact, 64-bit) and reads positions
+// back once per frame for drawing and housekeeping. Returns null where WebGPU is absent.
+//
+// Body layout, shared with the renderer: vec4 (x, y, mass, radius) per star.
 
 const WG = 256;
+const MAX_CORES = 4;
 
 const SHADER = /* wgsl */ `
-struct Params { n: u32, pairCap: u32, eps2: f32, touchFactor: f32 }
+struct Params { n: u32, k: u32, dt: f32, eps2: f32 }
+struct Core { pos: vec2<f32>, m: f32, e2: f32 }
 @group(0) @binding(0) var<uniform> p: Params;
-@group(0) @binding(1) var<storage, read> body: array<vec4<f32>>;   // x, y, m, r
-@group(0) @binding(2) var<storage, read_write> accel: array<vec2<f32>>;
-@group(0) @binding(3) var<storage, read_write> pairCount: atomic<u32>;
-@group(0) @binding(4) var<storage, read_write> pairs: array<u32>;
+@group(0) @binding(1) var<storage, read_write> body: array<vec4<f32>>;  // x, y, m, r
+@group(0) @binding(2) var<storage, read_write> vel: array<vec2<f32>>;
+@group(0) @binding(3) var<storage, read_write> acc: array<vec2<f32>>;
+@group(0) @binding(4) var<uniform> cores: array<Core, ${MAX_CORES}>;
+@group(0) @binding(5) var<storage, read_write> react: array<vec2<f32>>; // per workgroup, per core: sum m * a_on_core
 
 var<workgroup> tile: array<vec4<f32>, ${WG}>;
+var<workgroup> red: array<vec2<f32>, ${WG}>;
+
+// first half-kick with last step's acceleration, then drift
+@compute @workgroup_size(${WG})
+fn kickDrift(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= p.n) { return; }
+  let v = vel[i] + acc[i] * (0.5 * p.dt);
+  vel[i] = v;
+  body[i] = vec4<f32>(body[i].xy + v * p.dt, body[i].zw);
+}
 
 @compute @workgroup_size(${WG})
-fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+fn force(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid: vec3<u32>) {
   let i = gid.x;
   let n = p.n;
   var me = vec4<f32>(0.0);
@@ -24,136 +40,227 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
   let tiles = (n + ${WG}u - 1u) / ${WG}u;
   for (var t = 0u; t < tiles; t++) {
     let j0 = t * ${WG}u + lid.x;
-    if (j0 < n) { tile[lid.x] = body[j0]; } else { tile[lid.x] = vec4<f32>(0.0); }
+    tile[lid.x] = select(vec4<f32>(0.0), body[j0], j0 < n);
     workgroupBarrier();
     if (i < n) {
       let limit = min(${WG}u, n - t * ${WG}u);
-      for (var k = 0u; k < limit; k++) {
-        let j = t * ${WG}u + k;
-        if (j == i) { continue; }
-        let o = tile[k];
-        let d = o.xy - me.xy;
-        let d2 = dot(d, d);
-        let q = d2 + p.eps2;
-        let inv = inverseSqrt(q);
-        a += d * (o.z * inv * inv * inv);
-        if (j > i) {
-          let reach = p.touchFactor * (me.w + o.w);
-          if (d2 < reach * reach) {
-            let slot = atomicAdd(&pairCount, 1u);
-            if (slot * 2u + 1u < p.pairCap) { pairs[slot * 2u] = i; pairs[slot * 2u + 1u] = j; }
-          }
-        }
+      var kk = 0u;
+      // four pairs per iteration; the self term is exactly zero (d = 0), no branch needed
+      for (; kk + 4u <= limit; kk += 4u) {
+        let o0 = tile[kk]; let o1 = tile[kk + 1u]; let o2 = tile[kk + 2u]; let o3 = tile[kk + 3u];
+        let d0 = o0.xy - me.xy; let q0 = dot(d0, d0) + p.eps2; let s0 = inverseSqrt(q0);
+        let d1 = o1.xy - me.xy; let q1 = dot(d1, d1) + p.eps2; let s1 = inverseSqrt(q1);
+        let d2 = o2.xy - me.xy; let q2 = dot(d2, d2) + p.eps2; let s2 = inverseSqrt(q2);
+        let d3 = o3.xy - me.xy; let q3 = dot(d3, d3) + p.eps2; let s3 = inverseSqrt(q3);
+        a += d0 * (o0.z * s0 * s0 * s0) + d1 * (o1.z * s1 * s1 * s1) + d2 * (o2.z * s2 * s2 * s2) + d3 * (o3.z * s3 * s3 * s3);
+      }
+      for (; kk < limit; kk++) {
+        let o = tile[kk];
+        let d = o.xy - me.xy; let q = dot(d, d) + p.eps2; let s = inverseSqrt(q);
+        a += d * (o.z * s * s * s);
       }
     }
     workgroupBarrier();
   }
-  if (i < n) { accel[i] = a; }
+  // cores: exact pull on this star, and this star's pull on each core (reduced per workgroup)
+  for (var c = 0u; c < p.k; c++) {
+    var contrib = vec2<f32>(0.0);
+    if (i < n) {
+      let d = cores[c].pos - me.xy;
+      let q = dot(d, d) + cores[c].e2;
+      let s = inverseSqrt(q);
+      let f = s * s * s;
+      a += d * (cores[c].m * f);
+      contrib = -d * (me.z * f);
+    }
+    red[lid.x] = contrib;
+    workgroupBarrier();
+    for (var stride = ${WG}u / 2u; stride > 0u; stride = stride / 2u) {
+      if (lid.x < stride) { red[lid.x] += red[lid.x + stride]; }
+      workgroupBarrier();
+    }
+    if (lid.x == 0u) { react[wid.x * ${MAX_CORES}u + c] = red[0]; }
+    workgroupBarrier();
+  }
+  if (i < n) { acc[i] = a; }
+}
+
+@compute @workgroup_size(${WG})
+fn kick(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= p.n) { return; }
+  vel[i] = vel[i] + acc[i] * (0.5 * p.dt);
 }`;
 
-export async function createGpuSolver() {
+/** A WebGPU device, or null where there is none. Cheap enough to decide the star count on. */
+export async function probeGpu() {
   if (typeof navigator === 'undefined' || !navigator.gpu) return null;
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }).catch(() => null);
   if (!adapter) return null;
   const device = await adapter.requestDevice().catch(() => null);
   if (!device) return null;
+  device.addEventListener('uncapturederror', (e) => console.error('WebGPU:', e.error?.message || e.error));
+  return device;
+}
 
+export function createGpuEngine(device, sim) {
   const module = device.createShaderModule({ code: SHADER });
-  const pipeline = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'main' } });
-  const uniform = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  // one explicit layout for all three kernels (an automatic layout would only list the bindings
+  // each entry point touches, and the shared bind group would fail validation for the small ones)
+  const st = (type) => ({ visibility: GPUShaderStage.COMPUTE, buffer: { type } });
+  const bgl = device.createBindGroupLayout({ entries: [
+    { binding: 0, ...st('uniform') }, { binding: 1, ...st('storage') }, { binding: 2, ...st('storage') },
+    { binding: 3, ...st('storage') }, { binding: 4, ...st('uniform') }, { binding: 5, ...st('storage') },
+  ] });
+  const layout = device.createPipelineLayout({ bindGroupLayouts: [bgl] });
+  const pipelines = {};
+  for (const name of ['kickDrift', 'force', 'kick']) {
+    pipelines[name] = device.createComputePipeline({ layout, compute: { module, entryPoint: name } });
+  }
 
-  let cap = 0, pairCap = 0;
-  let bodyBuf, accelBuf, accelRead, countBuf, pairsBuf, pairsRead, countRead, bindGroup;
-  let staging = new Float32Array(0);
+  const n = sim.n, cap = n;
+  const groups = Math.ceil(n / WG);
+  const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
+  const bodyBuf = device.createBuffer({ size: cap * 16, usage });
+  const velBuf = device.createBuffer({ size: cap * 8, usage });
+  const accBuf = device.createBuffer({ size: cap * 8, usage });
+  const reactBuf = device.createBuffer({ size: groups * MAX_CORES * 8, usage });
+  const params = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const coresBuf = device.createBuffer({ size: MAX_CORES * 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const readBody = [0, 1].map(() => device.createBuffer({ size: cap * 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }));
+  const readVel = [0, 1].map(() => device.createBuffer({ size: cap * 8, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }));
+  const readReact = [0, 1].map(() => device.createBuffer({ size: groups * MAX_CORES * 8, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }));
+  const bindGroup = device.createBindGroup({
+    layout: bgl,
+    entries: [
+      { binding: 0, resource: { buffer: params } },
+      { binding: 1, resource: { buffer: bodyBuf } },
+      { binding: 2, resource: { buffer: velBuf } },
+      { binding: 3, resource: { buffer: accBuf } },
+      { binding: 4, resource: { buffer: coresBuf } },
+      { binding: 5, resource: { buffer: reactBuf } },
+    ],
+  });
 
-  const ensure = (n) => {
-    if (n <= cap) return;
-    cap = Math.ceil(n * 1.5) + 1024;
-    pairCap = 16 * cap + 4096;
-    for (const b of [bodyBuf, accelBuf, accelRead, countBuf, pairsBuf, pairsRead, countRead]) b?.destroy();
-    bodyBuf = device.createBuffer({ size: cap * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-    accelBuf = device.createBuffer({ size: cap * 8, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-    accelRead = device.createBuffer({ size: cap * 8, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-    countBuf = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
-    countRead = device.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-    pairsBuf = device.createBuffer({ size: pairCap * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-    pairsRead = device.createBuffer({ size: pairCap * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-    bindGroup = device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: uniform } },
-        { binding: 1, resource: { buffer: bodyBuf } },
-        { binding: 2, resource: { buffer: accelBuf } },
-        { binding: 3, resource: { buffer: countBuf } },
-        { binding: 4, resource: { buffer: pairsBuf } },
-      ],
-    });
-    staging = new Float32Array(cap * 4);
+  // initial upload from the CPU state
+  const positions = new Float32Array(cap * 4); // x, y, m, r: the renderer reads this directly
+  const velocities = new Float32Array(cap * 2);
+  for (let i = 0; i < n; i++) {
+    positions[4 * i] = sim.x[i]; positions[4 * i + 1] = sim.y[i]; positions[4 * i + 2] = sim.m[i]; positions[4 * i + 3] = sim.r[i];
+    velocities[2 * i] = sim.vx[i]; velocities[2 * i + 1] = sim.vy[i];
+  }
+  device.queue.writeBuffer(bodyBuf, 0, positions);
+  device.queue.writeBuffer(velBuf, 0, velocities);
+  device.queue.writeBuffer(accBuf, 0, new Float32Array(cap * 2));
+
+  const paramData = new ArrayBuffer(16);
+  const coreData = new Float32Array(MAX_CORES * 4);
+  const reaction = new Float64Array(MAX_CORES * 2); // latest known star pull on each core
+  let flip = 0;
+  let primed = false;
+
+  const writeParams = () => {
+    new Uint32Array(paramData, 0, 2).set([n, sim.k]);
+    new Float32Array(paramData, 8, 2).set([sim.o.dt, sim.o.softening ** 2]);
+    device.queue.writeBuffer(params, 0, paramData);
+  };
+  const writeCores = () => {
+    coreData.fill(0);
+    for (let c = 0; c < sim.k; c++) { coreData[4 * c] = sim.cx[c]; coreData[4 * c + 1] = sim.cy[c]; coreData[4 * c + 2] = sim.cm[c]; coreData[4 * c + 3] = sim.ce2[c]; }
+    device.queue.writeBuffer(coresBuf, 0, coreData);
   };
 
-  const zero = new Uint32Array(4);
-  let busy = false;
+  // Core accelerations: exact core-core terms plus the latest reduced star reaction.
+  const coreAccel = () => {
+    const { k, cx, cy, cax, cay, cm, ce2 } = sim;
+    for (let c = 0; c < k; c++) { cax[c] = reaction[2 * c] / cm[c]; cay[c] = reaction[2 * c + 1] / cm[c]; }
+    for (let a = 0; a < k; a++) {
+      for (let b = a + 1; b < k; b++) {
+        const dx = cx[b] - cx[a], dy = cy[b] - cy[a];
+        const q = dx * dx + dy * dy + ce2[a] + ce2[b];
+        const inv = 1 / (q * Math.sqrt(q));
+        cax[a] += inv * cm[b] * dx; cay[a] += inv * cm[b] * dy;
+        cax[b] -= inv * cm[a] * dx; cay[b] -= inv * cm[a] * dy;
+      }
+    }
+  };
+
+  const dispatch = (enc, name) => {
+    const pass = enc.beginComputePass();
+    pass.setPipeline(pipelines[name]);
+    pass.setBindGroup(0, bindGroup);
+    pass.dispatchWorkgroups(groups);
+    pass.end();
+  };
 
   return {
     kind: 'webgpu',
-    /**
-     * Adds body-body accelerations into sim.ax/ay and fills sim._touching; resolves when done.
-     * Only one call may be in flight at a time.
-     */
-    async accelerate(sim) {
-      if (busy) throw new Error('gpu solver busy');
-      busy = true;
-      try {
-        const n = sim.n;
-        ensure(n);
-        const { x, y, m, r } = sim;
-        for (let i = 0, k = 0; i < n; i++, k += 4) { staging[k] = x[i]; staging[k + 1] = y[i]; staging[k + 2] = m[i]; staging[k + 3] = r[i]; }
-        device.queue.writeBuffer(bodyBuf, 0, staging, 0, n * 4);
-        const u = new ArrayBuffer(16);
-        new Uint32Array(u, 0, 2).set([n, pairCap]);
-        new Float32Array(u, 8, 2).set([sim.o.softening * sim.o.softening, sim.o.touchFactor]);
-        device.queue.writeBuffer(uniform, 0, u);
-        device.queue.writeBuffer(countBuf, 0, zero);
+    positions,
+    velocities,
+    get count() { return n; },
 
+    /** Run `steps` physics steps and refresh `positions`; resolves when the readback is in. */
+    async advance(steps) {
+      const h = sim.o.dt / 2;
+      if (!primed) {
+        // initial accelerations for the first half-kick (the CPU side skipped its own)
+        writeParams(); writeCores();
         const enc = device.createCommandEncoder();
-        const pass = enc.beginComputePass();
-        pass.setPipeline(pipeline);
-        pass.setBindGroup(0, bindGroup);
-        pass.dispatchWorkgroups(Math.ceil(n / WG));
-        pass.end();
-        enc.copyBufferToBuffer(accelBuf, 0, accelRead, 0, n * 8);
-        enc.copyBufferToBuffer(countBuf, 0, countRead, 0, 16);
+        dispatch(enc, 'force');
         device.queue.submit([enc.finish()]);
-
-        await Promise.all([accelRead.mapAsync(GPUMapMode.READ, 0, n * 8), countRead.mapAsync(GPUMapMode.READ)]);
-        const acc = new Float32Array(accelRead.getMappedRange(0, n * 8));
-        const { ax, ay } = sim;
-        for (let i = 0, k = 0; i < n; i++, k += 2) { ax[i] += acc[k]; ay[i] += acc[k + 1]; }
-        accelRead.unmap();
-        const count = Math.min(new Uint32Array(countRead.getMappedRange())[0], pairCap >> 1);
-        countRead.unmap();
-
-        // touching pairs: a second small readback, only when there are any
-        sim._touchCount = 0;
-        if (count > 0) {
-          const bytes = count * 8;
-          const enc2 = device.createCommandEncoder();
-          enc2.copyBufferToBuffer(pairsBuf, 0, pairsRead, 0, bytes);
-          device.queue.submit([enc2.finish()]);
-          await pairsRead.mapAsync(GPUMapMode.READ, 0, bytes);
-          const pr = new Uint32Array(pairsRead.getMappedRange(0, bytes));
-          const t = sim._touching;
-          const take = Math.min(count * 2, t.length);
-          for (let k = 0; k < take; k++) t[k] = pr[k];
-          sim._touchCount = take;
-          pairsRead.unmap();
-        }
-      } finally {
-        busy = false;
+        primed = true;
       }
+      for (let s = 0; s < steps; s++) {
+        coreAccel();
+        sim.driftCores(sim.o.dt);        // cores half-kick + drift, in step with the stars
+        writeParams();
+        writeCores();
+        const enc = device.createCommandEncoder();
+        dispatch(enc, 'kickDrift');
+        dispatch(enc, 'force');
+        dispatch(enc, 'kick');
+        if (s === steps - 1) {
+          enc.copyBufferToBuffer(bodyBuf, 0, readBody[flip], 0, n * 16);
+          enc.copyBufferToBuffer(velBuf, 0, readVel[flip], 0, n * 8);
+          enc.copyBufferToBuffer(reactBuf, 0, readReact[flip], 0, groups * MAX_CORES * 8);
+        }
+        device.queue.submit([enc.finish()]);
+        coreAccel();
+        sim.kickCores(h);
+        sim.time += sim.o.dt;
+        sim.stats.steps++;
+      }
+      const rb = readBody[flip], rv = readVel[flip], rr = readReact[flip];
+      flip ^= 1;
+      await Promise.all([rb.mapAsync(GPUMapMode.READ, 0, n * 16), rv.mapAsync(GPUMapMode.READ, 0, n * 8), rr.mapAsync(GPUMapMode.READ)]);
+      positions.set(new Float32Array(rb.getMappedRange(0, n * 16)));
+      rb.unmap();
+      velocities.set(new Float32Array(rv.getMappedRange(0, n * 8)));
+      rv.unmap();
+      const parts = new Float32Array(rr.getMappedRange());
+      reaction.fill(0);
+      for (let g = 0; g < groups; g++) for (let c = 0; c < sim.k; c++) { reaction[2 * c] += parts[(g * MAX_CORES + c) * 2]; reaction[2 * c + 1] += parts[(g * MAX_CORES + c) * 2 + 1]; }
+      rr.unmap();
+
+      // housekeeping on the CPU copy: escapes and swallows respawn, then the few changed stars go back up
+      for (let i = 0; i < n; i++) { sim.x[i] = positions[4 * i]; sim.y[i] = positions[4 * i + 1]; }
+      const rewritten = sim.cull();
+      if (rewritten) {
+        const one = new Float32Array(4), vel = new Float32Array(2);
+        for (const i of rewritten) {
+          one[0] = sim.x[i]; one[1] = sim.y[i]; one[2] = sim.m[i]; one[3] = sim.r[i];
+          vel[0] = sim.vx[i]; vel[1] = sim.vy[i];
+          positions.set(one, 4 * i);
+          velocities.set(vel, 2 * i);
+          device.queue.writeBuffer(bodyBuf, 16 * i, one);
+          device.queue.writeBuffer(velBuf, 8 * i, vel);
+        }
+      }
+      return rewritten;
     },
+
     destroy() {
-      for (const b of [bodyBuf, accelBuf, accelRead, countBuf, pairsBuf, pairsRead, countRead, uniform]) b?.destroy();
+      for (const b of [bodyBuf, velBuf, accBuf, reactBuf, params, coresBuf, ...readBody, ...readVel, ...readReact]) b.destroy();
       device.destroy();
     },
   };

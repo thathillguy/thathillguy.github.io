@@ -1,58 +1,15 @@
 import { useEffect, useRef } from 'react';
 import { Driver } from '../sim/driver.js';
-import { schwarzschildRadius } from '../sim/nbody.js';
-import { WalkerPool, canShare } from '../sim/pool.js';
-import { createGpuSolver } from '../sim/gpu.js';
+import { probeGpu, createGpuEngine } from '../sim/gpu.js';
 import { createDiscRenderer } from '../render/discs.js';
 
-const UNITS = 100;   // the shorter side of the canvas spans this many sim units
-const BUDGET = 10;   // ms of physics per frame before the timestep coarsens
-const TIME_SCALE = 0.5; // sim seconds per real second; lower is calmer
-const STRIDE = 4;    // x, y, radius, colour per body in the GPU buffer
-const LENS_DISTANCE = 6.3; // effective lens-to-source distance in sim units: rE = sqrt(2 rs D)
-const EASE_IN = 0.16, EASE_OUT = 0.24; // seconds for the lens to appear and fade
+const UNITS = 100;          // the shorter side of the canvas spans this many sim units
+const BUDGET = 10;          // ms of physics per frame before the timestep coarsens
+const TIME_SCALE = 0.5;     // sim seconds per real second
+const LENS_DISTANCE = 6.3;  // effective lens-to-source distance: rE = sqrt(2 rs D)
+const EASE_IN = 0.16, EASE_OUT = 0.24; // seconds for the hole's lens to appear and fade
 
-// Collision scene: thousands of small planetesimals with random drift and a mild pull to the
-// centre, so contacts keep happening. It runs on indefinitely: whatever forms, stays.
-// Planetesimals: drawn size is physical size, so contact merges or shatters, and the heaviest can collapse.
-const COLLIDE_OPTS = { bodies: 0, nebulae: 1, nebulaMass: 400, coreFraction: 1, coreSoftening: 25, density: 0.5, touchFactor: 1, collapseFraction: 0.08 };
-function setupCollision(sim, count) {
-  sim.setCount(0);
-  const W = sim.halfW * 0.92, H = sim.halfH * 0.88;
-  // a coarse grid keeps spawns from overlapping without an n^2 search
-  const cell = 2.5, cols = Math.ceil((2 * W) / cell) + 1, rows = Math.ceil((2 * H) / cell) + 1;
-  const grid = new Map();
-  const key = (x, y) => (Math.floor((y + H) / cell) * cols + Math.floor((x + W) / cell));
-  const clear = (x, y, r) => {
-    const cx = Math.floor((x + W) / cell), cy = Math.floor((y + H) / cell);
-    for (let j = cy - 1; j <= cy + 1; j++) for (let i = cx - 1; i <= cx + 1; i++) {
-      const bucket = grid.get(j * cols + i);
-      if (bucket) for (const p of bucket) if (Math.hypot(p.x - x, p.y - y) < p.r + r + 0.3) return false;
-    }
-    return true;
-  };
-  for (let n = 0; n < count; n++) {
-    const u = Math.random();
-    const radius = u < 0.85 ? 0.12 + Math.random() * 0.25 : u < 0.98 ? 0.4 + Math.random() * 0.5 : 1 + Math.random() * 1.2;
-    let x, y, tries = 0;
-    do {
-      x = (Math.random() * 2 - 1) * W;
-      y = (Math.random() * 2 - 1) * H;
-    } while (++tries < 30 && !clear(x, y, radius));
-    const k = key(x, y);
-    if (!grid.has(k)) grid.set(k, []);
-    grid.get(k).push({ x, y, r: radius });
-    const speed = 0.5 + Math.random() * 4, ang = Math.random() * Math.PI * 2;
-    sim.addBody(x, y, speed * Math.cos(ang), speed * Math.sin(ang), radius, Math.floor(Math.random() * 4), 0);
-  }
-  // The bodies did not exist when the sim chose its constants: choose them again now.
-  sim.o.lightSpeed = null;
-  sim.o.holeMass = null;
-  sim._setConstants();
-  sim.o.holeSoftening = 2;
-}
-
-export default function NBodyCanvas({ bodies, scene, swarm = 3000, threads, gpu = true, nebulae = 2 }) {
+export default function NBodyCanvas({ starsGpu, starsCpu, gpu = true }) {
   const canvasRef = useRef(null);
   const labelRef = useRef(null);
 
@@ -72,137 +29,85 @@ export default function NBodyCanvas({ bodies, scene, swarm = 3000, threads, gpu 
     };
     measure();
 
-    const collide = scene === 'collide';
-    // Denser spawns get smaller bodies so that the opening moment is a cloud, not a merge burst.
-    const sizes = bodies >= 40000 ? { minRadius: 0.03, maxRadius: 0.09 } : {};
-    const layout = nebulae === 1 ? { nebulae: 1, nebulaRadius: 44 } : {}; // one disc, at rest in the middle
-    const driver = new Driver({ bodies, timeScale: TIME_SCALE, halfW: width / 2 / pxPerUnit, halfH: height / 2 / pxPerUnit, ...sizes, ...layout, ...(collide ? COLLIDE_OPTS : {}) });
-    const sim = driver.sim;
-    if (collide) setupCollision(sim, swarm);
-
-    // Body-body forces: the GPU when there is one, else a worker pool when the page is
-    // cross-origin isolated, else the main thread. The GPU attaches once it is ready.
-    const wanted = threads ?? Math.min(8, Math.max(0, (navigator.hardwareConcurrency || 2) - 2));
-    const pool = canShare() && wanted > 0 ? new WalkerPool(wanted) : null;
-    if (pool) sim.setPool(pool);
-    window.__nbody = { sim, driver, threads: pool ? pool.size : 0, shared: canShare(), gpu: null };
-    let gpuSolver = null, disposed = false;
-    if (gpu) {
-      createGpuSolver().then((solver) => {
-        if (!solver) return;
-        if (disposed) { solver.destroy(); return; }
-        gpuSolver = solver;
-        sim.setGpu(solver);
-        window.__nbody.gpu = solver.kind;
-      });
-    }
-
+    // Find out whether there is a GPU before deciding how many stars to make.
+    let driver = null, sim = null, engine = null, disposed = false;
+    const ready = (gpu ? probeGpu() : Promise.resolve(null)).then((device) => {
+      if (disposed) { device?.destroy(); return; }
+      driver = new Driver({ bodies: device ? starsGpu : starsCpu, prime: !device, timeScale: TIME_SCALE, halfW: width / 2 / pxPerUnit, halfH: height / 2 / pxPerUnit });
+      sim = driver.sim;
+      if (device) { engine = createGpuEngine(device, sim); driver.useGpu(engine); }
+      window.__nbody = driver; // handy in the console
+    });
 
     const fit = () => {
       measure();
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       renderer.resize(canvas.width, canvas.height, pxPerUnit * dpr);
-      sim.setViewport(width / 2 / pxPerUnit, height / 2 / pxPerUnit);
+      sim?.setViewport(width / 2 / pxPerUnit, height / 2 / pxPerUnit);
     };
     fit();
+    ready.then(() => sim?.setViewport(width / 2 / pxPerUnit, height / 2 / pxPerUnit));
 
-    // Collapsed bodies are left out: the lens pass draws their horizons, and a disc in the scene
-    // texture would show up a second time, displaced by any other hole's lensing.
-    let packed = new Float32Array(0);
-    const pack = () => {
-      const { n, x, y, r, colour, black } = sim;
-      if (packed.length < n * STRIDE) packed = new Float32Array(Math.ceil(n * 1.5) * STRIDE + 256);
-      let count = 0;
-      for (let i = 0, k = 0; i < n; i++) {
-        if (black[i]) continue;
-        packed[k] = x[i]; packed[k + 1] = y[i]; packed[k + 2] = r[i]; packed[k + 3] = colour[i];
-        k += STRIDE; count++;
-      }
-      return count;
-    };
-
-    // The pointer's lens sits where the pointer is; its strength eases toward 1 while held and 0
-    // after. Collapsed bodies lens too (the heaviest few if there are many).
+    // The pointer's black hole: its lens eases in while held and out after release.
     const lensState = { x: 0, y: 0, k: 0, target: 0 };
-    const lenses = [];
-    const toPx = (sx, sy) => [(sx * pxPerUnit + width / 2) * dpr, (sy * pxPerUnit + height / 2) * dpr];
-    const drawOnce = (dt = 0) => {
+    let uploadedState = -1;
+    const draw = (dt, now) => {
+      if (!sim) return;
       const rate = lensState.target > lensState.k ? dt / EASE_IN : dt / EASE_OUT;
       lensState.k += Math.max(-rate, Math.min(rate, lensState.target - lensState.k));
       const ease = lensState.k * lensState.k * (3 - 2 * lensState.k);
-      renderer.begin();
-      renderer.bodies(packed, pack());
-      lenses.length = 0;
-      if (ease > 0) {
-        const rs = sim.holeRadius;
-        lenses.push({ x: lensState.x * dpr, y: lensState.y * dpr, rE: Math.sqrt(2 * rs * LENS_DISTANCE) * pxPerUnit * dpr, rH: rs * pxPerUnit * dpr, k: ease });
-      }
-      const holes = [];
-      for (let i = 0; i < sim.n; i++) if (sim.black[i]) holes.push(i);
-      holes.sort((a, b) => sim.m[b] - sim.m[a]);
-      for (const i of holes.slice(0, 7)) {
-        const rs = schwarzschildRadius(sim.m[i], sim.o.lightSpeed);
-        const [px, py] = toPx(sim.x[i], sim.y[i]);
-        lenses.push({ x: px, y: py, rE: Math.sqrt(2 * rs * LENS_DISTANCE) * pxPerUnit * dpr, rH: rs * pxPerUnit * dpr, k: 1 });
-      }
-      renderer.lens(lenses);
-      renderer.end();
+      const rs = sim.holeRadius;
+      renderer.lens(lensState.x * dpr, lensState.y * dpr, Math.sqrt(2 * rs * LENS_DISTANCE) * pxPerUnit * dpr, rs * pxPerUnit * dpr, ease);
+      // upload a physics state once, then move the stars on along their velocities each frame
+      const fresh = driver.stateAt !== uploadedState;
+      uploadedState = driver.stateAt;
+      const lead = Math.min((now - driver.stateAt) / 1000, 0.25) * TIME_SCALE;
+      renderer.draw(fresh ? driver.positions : null, fresh ? driver.velocities : null, driver.coloursChanged ? driver.colours : null, sim.n, lead);
+      driver.coloursChanged = false;
     };
 
-    // Physics may span frames when it runs on the pool: start a tick only when none is in flight,
-    // and draw every frame from the current positions.
-    let last = performance.now();
-    let raf = 0;
-    let busy = false;
+    // Physics ticks run back to back (they await the GPU); drawing happens every frame.
+    let last = performance.now(), raf = 0, busy = false;
     const frame = (now) => {
       const dt = (now - last) / 1000;
-      if (!busy) {
+      if (!busy && driver) {
         last = now;
-        if (pool || sim.gpu) {
-          busy = true;
-          driver.tickAsync(dt, BUDGET).finally(() => { busy = false; });
-        } else {
-          driver.tick(dt, BUDGET);
-        }
+        busy = true;
+        driver.tick(dt, BUDGET).catch((e) => console.error(e)).finally(() => { busy = false; });
       }
-      drawOnce(dt);
+      draw(dt, now);
       raf = requestAnimationFrame(frame);
     };
-    if (reduceMotion) drawOnce();
+    if (reduceMotion) draw(0, performance.now());
     else raf = requestAnimationFrame(frame);
 
-    // Press and hold to put a black hole under the pointer; it follows a drag and goes on release.
     let pointerId = null;
     const place = (e) => {
+      if (!sim) return;
       const rect = canvas.getBoundingClientRect();
       const px = e.clientX - rect.left, py = e.clientY - rect.top;
       sim.setHole((px - width / 2) / pxPerUnit, (py - height / 2) / pxPerUnit);
       lensState.x = px;
       lensState.y = py;
       label.style.transform = `translate(${px + 18}px, ${py - 34}px)`;
-      if (reduceMotion) drawOnce(1);
     };
     const onDown = (e) => {
-      if (e.button !== undefined && e.button !== 0) return;
-      if (pointerId !== null) return;
+      if ((e.button !== undefined && e.button !== 0) || pointerId !== null || !sim) return;
       pointerId = e.pointerId;
       canvas.setPointerCapture(e.pointerId);
       lensState.target = 1;
-      label.textContent = `M = ${Math.round(sim.o.holeMass).toLocaleString()}  ·  r\u209B = ${sim.holeRadius.toFixed(2)}  ·  c = ${sim.o.lightSpeed.toFixed(sim.o.lightSpeed < 10 ? 2 : 0)}`;
+      label.textContent = `M = ${sim.o.holeMass.toLocaleString()}  ·  rₛ = ${sim.holeRadius.toFixed(2)}  ·  c = ${sim.o.lightSpeed}`;
       place(e);
       label.classList.add('on');
     };
-    const onMove = (e) => {
-      if (e.pointerId === pointerId) place(e);
-    };
+    const onMove = (e) => { if (e.pointerId === pointerId) place(e); };
     const onUp = (e) => {
       if (e.pointerId !== pointerId) return;
       pointerId = null;
-      sim.clearHole();
+      sim?.clearHole();
       lensState.target = 0;
       label.classList.remove('on');
-      if (reduceMotion) drawOnce(1);
     };
     canvas.addEventListener('pointerdown', onDown);
     canvas.addEventListener('pointermove', onMove);
@@ -211,7 +116,7 @@ export default function NBodyCanvas({ bodies, scene, swarm = 3000, threads, gpu 
 
     const onVisibility = () => { last = performance.now(); }; // no catch-up burst after a hidden tab
     document.addEventListener('visibilitychange', onVisibility);
-    const ro = new ResizeObserver(() => { fit(); if (reduceMotion) drawOnce(); });
+    const ro = new ResizeObserver(() => { fit(); if (reduceMotion) draw(0, performance.now()); });
     ro.observe(canvas);
 
     return () => {
@@ -222,12 +127,11 @@ export default function NBodyCanvas({ bodies, scene, swarm = 3000, threads, gpu 
       canvas.removeEventListener('pointermove', onMove);
       canvas.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('pointercancel', onUp);
-      renderer.dispose();
-      pool?.terminate();
       disposed = true;
-      gpuSolver?.destroy();
+      engine?.destroy();
+      renderer.dispose();
     };
-  }, [bodies, scene, swarm, threads, gpu, nebulae]);
+  }, [starsGpu, starsCpu, gpu]);
 
   return (
     <>
