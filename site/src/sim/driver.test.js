@@ -28,3 +28,9 @@ test('a frame never runs past its budget by more than one step', () => {
   assert.ok(steps <= 3, `ran ${steps} steps`);
   assert.ok(d.acc <= d.sim.o.dt + 1e-12, 'backlog was dropped');
 });
+
+test('timeScale slows the simulation clock relative to real time', () => {
+  const d = new Driver({ bodies: 10, random: seeded(), timeScale: 0.5 });
+  for (let f = 0; f < 120; f++) d.tick(1 / 60, 10); // two real seconds
+  assert.ok(Math.abs(d.sim.time - 1) < d.sim.o.dt * 2, `sim time ${d.sim.time}`);
+});

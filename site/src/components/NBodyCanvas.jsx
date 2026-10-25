@@ -4,6 +4,7 @@ import { createDiscRenderer } from '../render/discs.js';
 
 const UNITS = 100;   // the shorter side of the canvas spans this many sim units
 const BUDGET = 10;   // ms of physics per frame before the timestep coarsens
+const TIME_SCALE = 0.6; // sim seconds per real second; lower is calmer
 const STRIDE = 4;    // x, y, radius, colour per body in the GPU buffer
 const EINSTEIN = 4.2; // lensing ring radius in sim units; the dark horizon is the swallow radius
 const EASE_IN = 0.16, EASE_OUT = 0.24; // seconds for the lens to appear and fade
@@ -26,7 +27,7 @@ export default function NBodyCanvas({ bodies }) {
     };
     measure();
 
-    const driver = new Driver({ bodies, halfW: width / 2 / pxPerUnit, halfH: height / 2 / pxPerUnit });
+    const driver = new Driver({ bodies, timeScale: TIME_SCALE, halfW: width / 2 / pxPerUnit, halfH: height / 2 / pxPerUnit });
     const sim = driver.sim;
 
     const fit = () => {

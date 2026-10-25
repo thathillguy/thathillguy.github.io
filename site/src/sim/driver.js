@@ -12,6 +12,7 @@ export const DT_FINE = 1 / 120, DT_COARSE = 1 / 30;
 export class Driver {
   constructor(opts = {}) {
     this.sim = new NBody({ ...opts, dt: opts.dt ?? (opts.bodies > 4000 ? 1 / 60 : DT_FINE) });
+    this.timeScale = opts.timeScale ?? 1; // sim seconds per real second: below 1 plays slower
     this.acc = 0;
     this.stepMs = 0;     // cost of the most recent step
     this.costSum = 0;
@@ -22,7 +23,7 @@ export class Driver {
   /** Absorb elapsed real time and run steps until caught up or the budget (ms) is spent. */
   tick(seconds, budgetMs = 10) {
     const sim = this.sim;
-    this.acc += Math.min(Math.max(seconds, 0), sim.o.maxFrame);
+    this.acc += Math.min(Math.max(seconds, 0), sim.o.maxFrame) * this.timeScale;
     const start = this.now();
     let steps = 0;
     while (this.acc >= sim.o.dt) {
