@@ -6,20 +6,13 @@ const UNITS = 100;   // the shorter side of the canvas spans this many sim units
 const BUDGET = 10;   // ms of physics per frame before the timestep coarsens
 const STRIDE = 4;    // x, y, radius, colour per body in the GPU buffer
 
-export default function NBodyCanvas({ bodies, onStats }) {
+export default function NBodyCanvas({ bodies }) {
   const canvasRef = useRef(null);
-  const driverRef = useRef(null);
-  const onStatsRef = useRef(onStats);
-  onStatsRef.current = onStats;
-  const initialBodies = useRef(bodies);
-
-  // Follow later changes to the body count without rebuilding the sim.
-  useEffect(() => {
-    driverRef.current?.sim.setCount(bodies);
-  }, [bodies]);
+  const holeRef = useRef(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
+    const hole = holeRef.current;
     const renderer = createDiscRenderer(canvas);
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -33,8 +26,7 @@ export default function NBodyCanvas({ bodies, onStats }) {
     };
     measure();
 
-    const driver = new Driver({ bodies: initialBodies.current, halfW: width / 2 / pxPerUnit, halfH: height / 2 / pxPerUnit });
-    driverRef.current = driver;
+    const driver = new Driver({ bodies, halfW: width / 2 / pxPerUnit, halfH: height / 2 / pxPerUnit });
     const sim = driver.sim;
 
     const fit = () => {
@@ -43,6 +35,7 @@ export default function NBodyCanvas({ bodies, onStats }) {
       canvas.height = Math.round(height * dpr);
       renderer.resize(canvas.width, canvas.height, pxPerUnit * dpr);
       sim.setViewport(width / 2 / pxPerUnit, height / 2 / pxPerUnit);
+      hole.style.setProperty('--hole-size', `${2 * sim.o.holeRadius * pxPerUnit}px`);
     };
     fit();
 
@@ -62,32 +55,48 @@ export default function NBodyCanvas({ bodies, onStats }) {
       renderer.end();
     };
 
-    let frames = 0, lastStat = performance.now(), lastSimTime = 0, costSum = 0, costN = 0;
     let last = performance.now();
+    let raf = 0;
     const frame = (now) => {
-      const steps = driver.tick((now - last) / 1000, BUDGET);
+      driver.tick((now - last) / 1000, BUDGET);
       last = now;
-      if (steps) { costSum += driver.stepMs * steps; costN += steps; }
       drawOnce();
-
-      frames++;
-      if (now - lastStat >= 1000) {
-        const seconds = (now - lastStat) / 1000;
-        onStatsRef.current?.({
-          fps: frames / seconds,
-          speed: (sim.time - lastSimTime) / seconds,
-          renderer: renderer.kind,
-          stepMs: costN ? costSum / costN : 0,
-          stepsPerSecond: driver.stepsPerSecond,
-        });
-        frames = 0; lastStat = now; lastSimTime = sim.time; costSum = 0; costN = 0;
-      }
       raf = requestAnimationFrame(frame);
     };
-
-    let raf = 0;
     if (reduceMotion) drawOnce();
     else raf = requestAnimationFrame(frame);
+
+    // Press and hold to put a black hole under the pointer; it follows a drag and goes on release.
+    let pointerId = null;
+    const place = (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const px = e.clientX - rect.left, py = e.clientY - rect.top;
+      sim.setHole((px - width / 2) / pxPerUnit, (py - height / 2) / pxPerUnit);
+      hole.style.transform = `translate(${px}px, ${py}px)`;
+      if (reduceMotion) drawOnce();
+    };
+    const onDown = (e) => {
+      if (e.button !== undefined && e.button !== 0) return;
+      if (pointerId !== null) return;
+      pointerId = e.pointerId;
+      canvas.setPointerCapture(e.pointerId);
+      place(e);
+      hole.classList.add('on');
+    };
+    const onMove = (e) => {
+      if (e.pointerId === pointerId) place(e);
+    };
+    const onUp = (e) => {
+      if (e.pointerId !== pointerId) return;
+      pointerId = null;
+      sim.clearHole();
+      hole.classList.remove('on');
+      if (reduceMotion) drawOnce();
+    };
+    canvas.addEventListener('pointerdown', onDown);
+    canvas.addEventListener('pointermove', onMove);
+    canvas.addEventListener('pointerup', onUp);
+    canvas.addEventListener('pointercancel', onUp);
 
     const onVisibility = () => { last = performance.now(); }; // no catch-up burst after a hidden tab
     document.addEventListener('visibilitychange', onVisibility);
@@ -98,10 +107,18 @@ export default function NBodyCanvas({ bodies, onStats }) {
       cancelAnimationFrame(raf);
       ro.disconnect();
       document.removeEventListener('visibilitychange', onVisibility);
-      driverRef.current = null;
+      canvas.removeEventListener('pointerdown', onDown);
+      canvas.removeEventListener('pointermove', onMove);
+      canvas.removeEventListener('pointerup', onUp);
+      canvas.removeEventListener('pointercancel', onUp);
       renderer.dispose();
     };
-  }, []);
+  }, [bodies]);
 
-  return <canvas ref={canvasRef} className="nbody" aria-label="Gravity simulation of two colliding nebulae" />;
+  return (
+    <>
+      <canvas ref={canvasRef} className="nbody" aria-label="Gravity simulation of two colliding nebulae. Press and hold to place a black hole." />
+      <div ref={holeRef} className="hole" aria-hidden="true" />
+    </>
+  );
 }

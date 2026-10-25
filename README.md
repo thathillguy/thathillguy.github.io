@@ -6,7 +6,8 @@ Two nebulae, each a disc of small bodies around an unseen core, start on an ecce
 about each other and collide, swinging through one another and throwing out tidal arms. Every
 body attracts every other body (softened Newtonian gravity, Barnes-Hut quadtree, velocity Verlet);
 the cores are integrated exactly. Bodies thrown out of the system are replaced inside a nebula.
-The slider sets the population, up to 20,000 bodies.
+Press and hold anywhere to put a black hole under the pointer: it pulls on everything, swallows
+what reaches it, follows a drag, and vanishes on release.
 
 - `site/src/sim/nbody.js` is the physics. No DOM or React dependencies; tested with `node --test`,
   including a check of the tree's accelerations against the exact all-pairs result.

@@ -17,6 +17,9 @@ export const DEFAULTS = {
   softening: 1,          // Plummer softening for body-body forces
   separation: 110,       // starting distance between the two cores (their apoapsis)
   periapsis: 25,         // closest approach of the cores' mutual orbit
+  holeMass: 4500,        // the black hole placed under the pointer
+  holeSoftening: 2.5,
+  holeRadius: 1.4,       // bodies inside this are swallowed (and respawn in a nebula)
   massPerArea: null,     // body mass per radius^2; derived from the masses above unless set (tests)
   minRadius: 0.12,       // drawn radius; ~1px on a laptop
   maxRadius: 0.4,
@@ -45,14 +48,15 @@ export class NBody {
     this.halfW = this.o.halfW;
     this.halfH = this.o.halfH;
     this.time = 0;
-    this.stats = { escaped: 0, steps: 0, nodes: 0 };
+    this.stats = { escaped: 0, swallowed: 0, steps: 0, nodes: 0 };
+    this.hole = null;
     this._acc = 0;
     this.n = 0;
     this._alloc(Math.max(64, this.o.bodies * 2));
     this._stack = new Int32Array(4096);
     this._initCores();
     this.massPerArea = this.o.massPerArea ?? 1; // provisional until the population exists
-    for (let i = 0; i < this.o.bodies; i++) this._spawnInNebula(i % this.k);
+    for (let i = 0; i < this.o.bodies; i++) this._spawnInNebula(i % this.nebulaCount);
     if (this.o.massPerArea == null) {
       let sumR2 = 0;
       for (let i = 0; i < this.n; i++) sumR2 += this.r[i] * this.r[i];
@@ -95,9 +99,13 @@ export class NBody {
   /** The unseen cores: one per nebula, on a bound eccentric orbit about their common centre. */
   _initCores() {
     const k = (this.k = Math.max(1, this.o.nebulae | 0));
-    for (const name of ['cx', 'cy', 'cvx', 'cvy', 'cax', 'cay', 'cm', 'spin']) this[name] = new Float64Array(k);
-    const { nebulaMass, coreFraction, periapsis } = this.o;
-    this.cm.fill(nebulaMass * coreFraction);
+    this.nebulaCount = k;
+    const cap = k + 4; // room for a black hole or two
+    for (const name of ['cx', 'cy', 'cvx', 'cvy', 'cax', 'cay', 'cm', 'ce2', 'cabsorb', 'spin']) this[name] = new Float64Array(cap);
+    this.cpinned = new Uint8Array(cap);
+    const { nebulaMass, coreFraction, periapsis, coreSoftening } = this.o;
+    this.cm.fill(nebulaMass * coreFraction, 0, k);
+    this.ce2.fill(coreSoftening * coreSoftening, 0, k);
     if (k === 1) { this.spin[0] = 1; return; }
     // lay them along the viewport's long axis, not further apart than the view can show
     const sep = Math.min(this.o.separation, 1.1 * Math.max(this.halfW, this.halfH));
@@ -127,12 +135,40 @@ export class NBody {
     return this.n;
   }
 
+  /** Put the black hole at (x, y), creating it if needed. It is pinned: it pulls but does not move. */
+  setHole(x, y) {
+    if (this.hole == null) {
+      const c = (this.hole = this.k++);
+      this.cm[c] = this.o.holeMass;
+      this.ce2[c] = this.o.holeSoftening * this.o.holeSoftening;
+      this.cabsorb[c] = this.o.holeRadius;
+      this.cpinned[c] = 1;
+      this.cvx[c] = 0; this.cvy[c] = 0; this.cax[c] = 0; this.cay[c] = 0;
+    }
+    this.cx[this.hole] = x;
+    this.cy[this.hole] = y;
+  }
+
+  /** Remove the black hole, if there is one. */
+  clearHole() {
+    if (this.hole == null) return;
+    const c = this.hole;
+    const last = --this.k;
+    if (c !== last) {
+      for (const a of [this.cx, this.cy, this.cvx, this.cvy, this.cax, this.cay, this.cm, this.ce2, this.cabsorb, this.spin]) a[c] = a[last];
+      this.cpinned[c] = this.cpinned[last];
+    }
+    this.cpinned[last] = 0;
+    this.cabsorb[last] = 0;
+    this.hole = null;
+  }
+
   /** Change how many bodies the sim keeps alive. Extra bodies spawn in place; surplus ones vanish. */
   setCount(target) {
     target = Math.max(0, Math.floor(target));
     this.o.bodies = target;
     while (this.n > target) this.n--;
-    while (this.n < target) this._spawnInNebula(this.n % this.k);
+    while (this.n < target) this._spawnInNebula(this.n % this.nebulaCount);
   }
 
   addBody(x, y, vx, vy, radius, colourIndex, home = 0) {
@@ -243,9 +279,9 @@ export class NBody {
   }
 
   _accelerate() {
-    const { n, k, x, y, ax, ay, m, cx, cy, cax, cay, cm } = this;
-    const { softening, coreSoftening, theta } = this.o;
-    const eps2 = softening * softening, ce2 = coreSoftening * coreSoftening;
+    const { n, k, x, y, ax, ay, m, cx, cy, cax, cay, cm, ce2 } = this;
+    const { softening, theta } = this.o;
+    const eps2 = softening * softening;
     const theta2 = theta * theta;
 
     // cores <-> cores, and cores <-> bodies (exact, pairwise, momentum-conserving)
@@ -253,7 +289,7 @@ export class NBody {
     for (let a = 0; a < k; a++) {
       for (let b = a + 1; b < k; b++) {
         const dx = cx[b] - cx[a], dy = cy[b] - cy[a];
-        const q = dx * dx + dy * dy + 2 * ce2;
+        const q = dx * dx + dy * dy + ce2[a] + ce2[b];
         const inv = 1 / (q * Math.sqrt(q));
         cax[a] += inv * cm[b] * dx; cay[a] += inv * cm[b] * dy;
         cax[b] -= inv * cm[a] * dx; cay[b] -= inv * cm[a] * dy;
@@ -264,7 +300,7 @@ export class NBody {
       const xi = x[i], yi = y[i], mi = m[i];
       for (let c = 0; c < k; c++) {
         const dx = cx[c] - xi, dy = cy[c] - yi;
-        const q = dx * dx + dy * dy + ce2;
+        const q = dx * dx + dy * dy + ce2[c];
         const inv = 1 / (q * Math.sqrt(q));
         axi += inv * cm[c] * dx; ayi += inv * cm[c] * dy;
         cax[c] -= inv * mi * dx; cay[c] -= inv * mi * dy;
@@ -309,14 +345,14 @@ export class NBody {
 
   /** Exact all-pairs body accelerations (cores included) into (outX, outY); tests only. */
   _accelerateDirect(outX, outY) {
-    const { n, k, x, y, m, cx, cy, cm } = this;
-    const { softening, coreSoftening } = this.o;
-    const eps2 = softening * softening, ce2 = coreSoftening * coreSoftening;
+    const { n, k, x, y, m, cx, cy, cm, ce2 } = this;
+    const { softening } = this.o;
+    const eps2 = softening * softening;
     for (let i = 0; i < n; i++) {
       outX[i] = 0; outY[i] = 0;
       for (let c = 0; c < k; c++) {
         const dx = cx[c] - x[i], dy = cy[c] - y[i];
-        const q = dx * dx + dy * dy + ce2;
+        const q = dx * dx + dy * dy + ce2[c];
         const inv = 1 / (q * Math.sqrt(q));
         outX[i] += inv * cm[c] * dx; outY[i] += inv * cm[c] * dy;
       }
@@ -343,13 +379,15 @@ export class NBody {
       vx[i] += ax[i] * h; vy[i] += ay[i] * h;
       x[i] += vx[i] * dt; y[i] += vy[i] * dt;
     }
+    const pinned = this.cpinned;
     for (let c = 0; c < k; c++) {
+      if (pinned[c]) continue;
       cvx[c] += cax[c] * h; cvy[c] += cay[c] * h;
       cx[c] += cvx[c] * dt; cy[c] += cvy[c] * dt;
     }
     this._accelerate();
     for (let i = 0; i < this.n; i++) { vx[i] += ax[i] * h; vy[i] += ay[i] * h; }
-    for (let c = 0; c < k; c++) { cvx[c] += cax[c] * h; cvy[c] += cay[c] * h; }
+    for (let c = 0; c < k; c++) { if (!pinned[c]) { cvx[c] += cax[c] * h; cvy[c] += cay[c] * h; } }
     this._cull();
     this.time += dt;
     this.stats.steps++;
@@ -364,7 +402,8 @@ export class NBody {
     }
   }
 
-  // Drop bodies flung far out of view, then top the population back up inside the nebulae.
+  // Drop bodies flung far out of view or swallowed by a black hole, then top the population
+  // back up inside the nebulae.
   _cull() {
     const { x, y, r, m, colour, home } = this;
     const dead = this._dead;
@@ -373,6 +412,13 @@ export class NBody {
     let changed = false;
     for (let i = 0; i < this.n; i++) {
       if (x[i] * x[i] + y[i] * y[i] > far2) { dead[i] = 1; this.stats.escaped++; changed = true; }
+    }
+    if (this.hole != null) {
+      const c = this.hole, hx = this.cx[c], hy = this.cy[c], rr = this.cabsorb[c] * this.cabsorb[c];
+      for (let i = 0; i < this.n; i++) {
+        const dx = x[i] - hx, dy = y[i] - hy;
+        if (dx * dx + dy * dy < rr) { dead[i] = 1; this.stats.swallowed++; changed = true; }
+      }
     }
     if (!changed) return;
     let w = 0;
@@ -387,7 +433,7 @@ export class NBody {
       w++;
     }
     this.n = w;
-    while (this.n < this.o.bodies) this._spawnInNebula(Math.floor(this.random() * this.k));
+    while (this.n < this.o.bodies) this._spawnInNebula(Math.floor(this.random() * this.nebulaCount));
   }
 
   /** Total momentum of bodies and cores, for tests. */
@@ -400,22 +446,22 @@ export class NBody {
 
   /** Total mechanical energy (kinetic + softened potential), exact; for tests only. */
   energy() {
-    const { n, k, x, y, vx, vy, m, cx, cy, cvx, cvy, cm } = this;
-    const { softening, coreSoftening } = this.o;
-    const eps2 = softening * softening, ce2 = coreSoftening * coreSoftening;
+    const { n, k, x, y, vx, vy, m, cx, cy, cvx, cvy, cm, ce2 } = this;
+    const { softening } = this.o;
+    const eps2 = softening * softening;
     let e = 0;
     for (let c = 0; c < k; c++) {
       e += 0.5 * cm[c] * (cvx[c] * cvx[c] + cvy[c] * cvy[c]);
       for (let d = c + 1; d < k; d++) {
         const dx = cx[d] - cx[c], dy = cy[d] - cy[c];
-        e -= (cm[c] * cm[d]) / Math.sqrt(dx * dx + dy * dy + 2 * ce2);
+        e -= (cm[c] * cm[d]) / Math.sqrt(dx * dx + dy * dy + ce2[c] + ce2[d]);
       }
     }
     for (let i = 0; i < n; i++) {
       e += 0.5 * m[i] * (vx[i] * vx[i] + vy[i] * vy[i]);
       for (let c = 0; c < k; c++) {
         const dx = cx[c] - x[i], dy = cy[c] - y[i];
-        e -= (cm[c] * m[i]) / Math.sqrt(dx * dx + dy * dy + ce2);
+        e -= (cm[c] * m[i]) / Math.sqrt(dx * dx + dy * dy + ce2[c]);
       }
       for (let j = i + 1; j < n; j++) {
         const dx = x[j] - x[i], dy = y[j] - y[i];

@@ -114,3 +114,25 @@ test('population is kept constant and finite through a long run', () => {
   for (let i = 0; i < sim.count; i++) assert.ok(Number.isFinite(sim.x[i]) && Number.isFinite(sim.y[i]));
   for (let c = 0; c < sim.k; c++) assert.ok(Number.isFinite(sim.cx[c]) && Number.isFinite(sim.cvx[c]));
 });
+
+test('a black hole under the pointer pulls bodies in, swallows them, and can be removed', () => {
+  const sim = new NBody({ bodies: 2000, random: seeded(21) });
+  const c = 0; // put the hole just outside nebula 0's disc
+  const hx = sim.cx[c] + 40, hy = sim.cy[c];
+  sim.setHole(hx, hy);
+  assert.equal(sim.k, 3);
+  // mean acceleration of nebula-0 bodies now points toward the hole
+  sim._accelerate();
+  let ax = 0, cnt = 0;
+  for (let i = 0; i < sim.n; i++) if (sim.home[i] === 0) { ax += sim.ax[i]; cnt++; }
+  assert.ok(ax / cnt > 0, 'bodies are pulled toward +x where the hole is');
+  for (let k = 0; k < 120 * 8; k++) sim.step();
+  assert.ok(sim.stats.swallowed > 20, `swallowed ${sim.stats.swallowed}`);
+  assert.equal(sim.count, 2000, 'swallowed bodies are replaced');
+  assert.equal(sim.cx[sim.hole], hx, 'the hole does not move');
+  sim.clearHole();
+  assert.equal(sim.k, 2);
+  assert.equal(sim.hole, null);
+  for (let k = 0; k < 10; k++) sim.step();
+  assert.equal(sim.count, 2000);
+});
