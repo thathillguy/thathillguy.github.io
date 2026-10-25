@@ -16,6 +16,10 @@ would coagulate away within a minute.
 
 - `site/src/sim/nbody.js` is the physics. No DOM or React dependencies; tested with `node --test`,
   including a check of the tree's accelerations against the exact all-pairs result.
+- `site/src/sim/gpu.js` is a WebGPU compute solver: every body against every other, tiled through
+  workgroup memory, producing both accelerations and touching pairs in one pass. It is used
+  when the browser has WebGPU (then the page starts with 50,000 bodies); the CPU keeps the
+  authoritative 64-bit state, so merges and conservation are unchanged. `?gpu=0` disables it.
 - `site/src/sim/walk.js` is the tree walk kernel; `walker.js` runs it in worker threads over
   `SharedArrayBuffer` memory, pulling chunks from a shared counter (`pool.js`). That needs
   cross-origin isolation, which GitHub Pages cannot provide in headers, so `public/coi-sw.js`

@@ -220,6 +220,11 @@ export class NBody {
     this._shareGenSent = -1;
   }
 
+  /** Compute body-body forces on the GPU from now on (all pairs, no tree). */
+  setGpu(gpu) {
+    this.gpu = gpu;
+  }
+
   /** The buffers a walker needs, for posting to workers. */
   sharedBuffers() {
     const b = (a) => a.buffer;
@@ -435,7 +440,7 @@ export class NBody {
   }
 
   // Core forces (exact) and the tree build; the body-body walk follows, serial or on the pool.
-  _prepareForces() {
+  _prepareForces(buildTree = true) {
     const { n, k, x, y, ax, ay, m, cx, cy, cax, cay, cm, ce2 } = this;
 
     // cores <-> cores, and cores <-> bodies (exact, pairwise, momentum-conserving)
@@ -463,7 +468,7 @@ export class NBody {
     }
     this._touchCount = 0;
     if (n < 2) return false;
-    this._buildTree();
+    if (buildTree) this._buildTree();
     return true;
   }
 
@@ -482,8 +487,13 @@ export class NBody {
     this._touchCount = walkRange(this._walkViews(), 0, this.n, this._stack, this._touching, 0, this._touchPer);
   }
 
-  /** Forces with the tree walk spread over the worker pool. */
+  /** Forces with the body-body part on the GPU, or the tree walk spread over the worker pool. */
   async _accelerateAsync() {
+    if (this.gpu) {
+      if (!this._prepareForces(false)) return;
+      await this.gpu.accelerate(this);
+      return;
+    }
     if (!this._prepareForces()) return;
     const regions = await this.pool.walk(this);
     // gather each walker's touching pairs into region 0 (they are disjoint by construction)
@@ -530,9 +540,9 @@ export class NBody {
     this._finishStep(h);
   }
 
-  /** The same step, with the tree walk on the worker pool. */
+  /** The same step, with the body-body forces on the GPU or the worker pool. */
   async stepAsync() {
-    if (!this.pool) { this.step(); return; }
+    if (!this.pool && !this.gpu) { this.step(); return; }
     const h = this._beginStep();
     await this._accelerateAsync();
     this._finishStep(h);

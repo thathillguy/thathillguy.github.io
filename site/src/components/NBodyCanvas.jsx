@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Driver } from '../sim/driver.js';
 import { schwarzschildRadius } from '../sim/nbody.js';
 import { WalkerPool, canShare } from '../sim/pool.js';
+import { createGpuSolver } from '../sim/gpu.js';
 import { createDiscRenderer } from '../render/discs.js';
 
 const UNITS = 100;   // the shorter side of the canvas spans this many sim units
@@ -50,7 +51,7 @@ function setupCollision(sim, count) {
   sim.o.holeSoftening = 2;
 }
 
-export default function NBodyCanvas({ bodies, scene, swarm = 3000, threads }) {
+export default function NBodyCanvas({ bodies, scene, swarm = 3000, threads, gpu = true }) {
   const canvasRef = useRef(null);
   const labelRef = useRef(null);
 
@@ -71,15 +72,28 @@ export default function NBodyCanvas({ bodies, scene, swarm = 3000, threads }) {
     measure();
 
     const collide = scene === 'collide';
-    const driver = new Driver({ bodies, timeScale: TIME_SCALE, halfW: width / 2 / pxPerUnit, halfH: height / 2 / pxPerUnit, ...(collide ? COLLIDE_OPTS : {}) });
+    // Denser spawns get smaller bodies so that the opening moment is a cloud, not a merge burst.
+    const sizes = bodies >= 40000 ? { minRadius: 0.03, maxRadius: 0.09 } : {};
+    const driver = new Driver({ bodies, timeScale: TIME_SCALE, halfW: width / 2 / pxPerUnit, halfH: height / 2 / pxPerUnit, ...sizes, ...(collide ? COLLIDE_OPTS : {}) });
     const sim = driver.sim;
     if (collide) setupCollision(sim, swarm);
 
-    // Worker pool for the tree walk, when the page is cross-origin isolated.
+    // Body-body forces: the GPU when there is one, else a worker pool when the page is
+    // cross-origin isolated, else the main thread. The GPU attaches once it is ready.
     const wanted = threads ?? Math.min(8, Math.max(0, (navigator.hardwareConcurrency || 2) - 2));
     const pool = canShare() && wanted > 0 ? new WalkerPool(wanted) : null;
     if (pool) sim.setPool(pool);
-    window.__nbody = { sim, driver, threads: pool ? pool.size : 0, shared: canShare() };
+    window.__nbody = { sim, driver, threads: pool ? pool.size : 0, shared: canShare(), gpu: null };
+    let gpuSolver = null, disposed = false;
+    if (gpu) {
+      createGpuSolver().then((solver) => {
+        if (!solver) return;
+        if (disposed) { solver.destroy(); return; }
+        gpuSolver = solver;
+        sim.setGpu(solver);
+        window.__nbody.gpu = solver.kind;
+      });
+    }
 
 
     const fit = () => {
@@ -143,7 +157,7 @@ export default function NBodyCanvas({ bodies, scene, swarm = 3000, threads }) {
       const dt = (now - last) / 1000;
       if (!busy) {
         last = now;
-        if (pool) {
+        if (pool || sim.gpu) {
           busy = true;
           driver.tickAsync(dt, BUDGET).finally(() => { busy = false; });
         } else {
@@ -208,8 +222,10 @@ export default function NBodyCanvas({ bodies, scene, swarm = 3000, threads }) {
       canvas.removeEventListener('pointercancel', onUp);
       renderer.dispose();
       pool?.terminate();
+      disposed = true;
+      gpuSolver?.destroy();
     };
-  }, [bodies, scene, swarm, threads]);
+  }, [bodies, scene, swarm, threads, gpu]);
 
   return (
     <>
