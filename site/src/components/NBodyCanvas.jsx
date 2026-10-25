@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Driver } from '../sim/driver.js';
 import { schwarzschildRadius } from '../sim/nbody.js';
+import { WalkerPool, canShare } from '../sim/pool.js';
 import { createDiscRenderer } from '../render/discs.js';
 
 const UNITS = 100;   // the shorter side of the canvas spans this many sim units
@@ -49,7 +50,7 @@ function setupCollision(sim, count) {
   sim.o.holeSoftening = 2;
 }
 
-export default function NBodyCanvas({ bodies, scene, swarm = 3000 }) {
+export default function NBodyCanvas({ bodies, scene, swarm = 3000, threads }) {
   const canvasRef = useRef(null);
   const labelRef = useRef(null);
 
@@ -73,6 +74,13 @@ export default function NBodyCanvas({ bodies, scene, swarm = 3000 }) {
     const driver = new Driver({ bodies, timeScale: TIME_SCALE, halfW: width / 2 / pxPerUnit, halfH: height / 2 / pxPerUnit, ...(collide ? COLLIDE_OPTS : {}) });
     const sim = driver.sim;
     if (collide) setupCollision(sim, swarm);
+
+    // Worker pool for the tree walk, when the page is cross-origin isolated.
+    const wanted = threads ?? Math.min(8, Math.max(0, (navigator.hardwareConcurrency || 2) - 2));
+    const pool = canShare() && wanted > 0 ? new WalkerPool(wanted) : null;
+    if (pool) sim.setPool(pool);
+    window.__nbody = { sim, driver, threads: pool ? pool.size : 0, shared: canShare() };
+
 
     const fit = () => {
       measure();
@@ -126,12 +134,22 @@ export default function NBodyCanvas({ bodies, scene, swarm = 3000 }) {
       renderer.end();
     };
 
+    // Physics may span frames when it runs on the pool: start a tick only when none is in flight,
+    // and draw every frame from the current positions.
     let last = performance.now();
     let raf = 0;
+    let busy = false;
     const frame = (now) => {
       const dt = (now - last) / 1000;
-      driver.tick(dt, BUDGET);
-      last = now;
+      if (!busy) {
+        last = now;
+        if (pool) {
+          busy = true;
+          driver.tickAsync(dt, BUDGET).finally(() => { busy = false; });
+        } else {
+          driver.tick(dt, BUDGET);
+        }
+      }
       drawOnce(dt);
       raf = requestAnimationFrame(frame);
     };
@@ -189,8 +207,9 @@ export default function NBodyCanvas({ bodies, scene, swarm = 3000 }) {
       canvas.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('pointercancel', onUp);
       renderer.dispose();
+      pool?.terminate();
     };
-  }, [bodies, scene, swarm]);
+  }, [bodies, scene, swarm, threads]);
 
   return (
     <>

@@ -43,6 +43,29 @@ export class Driver {
     return steps;
   }
 
+  /** As tick(), awaiting each step so the tree walk can run on the worker pool. */
+  async tickAsync(seconds, budgetMs = 10) {
+    const sim = this.sim;
+    this.acc += Math.min(Math.max(seconds, 0), sim.o.maxFrame) * this.timeScale;
+    const start = this.now();
+    let steps = 0;
+    while (this.acc >= sim.o.dt) {
+      const t = this.now();
+      await sim.stepAsync();
+      this.acc -= sim.o.dt;
+      steps++;
+      this.stepMs = this.now() - t;
+      this.costSum += this.stepMs;
+      this.costN++;
+      if (this.now() - start > budgetMs) {
+        this.acc = Math.min(this.acc, sim.o.dt);
+        break;
+      }
+    }
+    this.adapt(budgetMs);
+    return steps;
+  }
+
   // Keep the sim real-time: when a frame's worth of steps costs more than the budget, double the
   // step (down to 30 steps per second); when it is comfortably cheap again, halve it back.
   adapt(budgetMs) {

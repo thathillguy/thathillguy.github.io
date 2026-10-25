@@ -16,11 +16,14 @@ would coagulate away within a minute.
 
 - `site/src/sim/nbody.js` is the physics. No DOM or React dependencies; tested with `node --test`,
   including a check of the tree's accelerations against the exact all-pairs result.
-- `site/src/sim/driver.js` runs it in real time within a per-frame budget and adapts the timestep
-  (120 down to 30 steps per second) to the measured cost. It runs on the main thread: bodies can
-  only move as often as the physics steps, so a worker would not make the picture smoother.
-  When benchmarking, keep the browser window in front; macOS slows a background app's threads
-  several-fold, which is easy to mistake for a slow algorithm.
+- `site/src/sim/walk.js` is the tree walk kernel; `walker.js` runs it in worker threads over
+  `SharedArrayBuffer` memory, pulling chunks from a shared counter (`pool.js`). That needs
+  cross-origin isolation, which GitHub Pages cannot provide in headers, so `public/coi-sw.js`
+  is a service worker that adds them; a first visit reloads once. Without isolation the walk
+  runs single-threaded, with identical results. `?threads=N` forces a pool size (0 = none).
+- `site/src/sim/driver.js` runs the sim in real time within a per-frame budget and adapts the
+  timestep (120 down to 30 steps per second) to the measured cost. When benchmarking, keep the
+  browser window in front; macOS slows a background app's threads several-fold.
 - `site/src/render/discs.js` draws the bodies with WebGL2 instanced quads and a signed-distance
   circle shader (flat fill, black rim), with a 2D canvas fallback.
 - `site/src/components/NBodyCanvas.jsx` wires those together and handles the pointer.

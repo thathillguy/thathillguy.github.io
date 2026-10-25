@@ -4,8 +4,17 @@
 // Units: distance in "sim units", where the shorter side of the viewport spans 100 units;
 // time in seconds; G = 1. Coordinates follow the screen: origin at the centre, y grows downward.
 
+import { walkRange, EMPTY, INTERNAL, CROWD } from './walk.js';
+
 export const COLOURS = ['#E24e42', '#e9b000', '#EB6E80', '#008F95'];
 export const BLACK = 4; // colour index of a collapsed body
+
+// Arrays live in SharedArrayBuffers when the environment has them, so worker threads can walk
+// the same tree without copying. Plain ArrayBuffers otherwise; the physics is identical.
+const shared = () => typeof SharedArrayBuffer !== 'undefined' && (typeof crossOriginIsolated === 'undefined' || crossOriginIsolated);
+const f64 = (n) => new Float64Array(shared() ? new SharedArrayBuffer(n * 8) : n);
+const i32 = (n) => new Int32Array(shared() ? new SharedArrayBuffer(n * 4) : n);
+const u8 = (n) => new Uint8Array(n);
 const NEBULA_COLOURS = [[0, 1], [2, 3]]; // each nebula draws from its own pair
 
 export const DEFAULTS = {
@@ -46,8 +55,9 @@ export const DEFAULTS = {
   random: Math.random,
 };
 
-const EMPTY = -1, INTERNAL = -2, CROWD = -3; // quadtree leaf states (CROWD: several coincident bodies)
 const MAX_DEPTH = 24;
+const POOL_MAX = 16; // touching-pair regions are reserved for up to this many walkers
+let shareGeneration = 0; // global, so workers never confuse one sim's buffers with another's
 
 /** Schwarzschild radius of a mass m: 2 G m / c^2, with G = 1. */
 export function schwarzschildRadius(m, c) {
@@ -111,28 +121,35 @@ export class NBody {
     this.cap = cap;
     // All 64-bit: 32-bit storage measured slower in V8 (each load converts to a double) and
     // rounding the accelerations breaks the exact pairwise symmetry that conserves momentum.
-    for (const k of ['x', 'y', 'vx', 'vy', 'ax', 'ay', 'r', 'm']) this[k] = new Float64Array(cap);
-    this.colour = new Uint8Array(cap);
-    this.home = new Uint8Array(cap);
-    this.black = new Uint8Array(cap); // 1 for a body that has collapsed into a black hole
-    this._dead = new Uint8Array(cap);
+    for (const k of ['x', 'y', 'vx', 'vy', 'ax', 'ay', 'r', 'm']) this[k] = f64(cap);
+    this.colour = u8(cap);
+    this.home = u8(cap);
+    this.black = u8(cap); // 1 for a body that has collapsed into a black hole
+    this._dead = u8(cap);
     this._keys = new Float64Array(cap);   // Morton code * 2^20 + index, for sorting
     this._scratch = new Float64Array(cap);
     this._scratch8 = new Uint8Array(cap);
+    // touching pairs: one region per walker (region 0 doubles as the single-thread region)
+    this._touchPer = 8 * Math.ceil(cap / 4) + 1024;
+    this._touching = i32(this._touchPer * POOL_MAX);
+    this._touchCount = 0;
+    this._ctrl = i32(4); // shared chunk counter for the pool
     this._allocTree(cap * 4 + 64);
+    this._shareGen = ++shareGeneration;
   }
 
   _allocTree(cap) {
     this.treeCap = cap;
-    this.nx = new Float64Array(cap);   // cell centre
-    this.ny = new Float64Array(cap);
-    this.nh = new Float64Array(cap);   // cell half-size
-    this.nm = new Float64Array(cap);   // mass in cell
-    this.ncx = new Float64Array(cap);  // centre of mass (sum m*x during the build)
-    this.ncy = new Float64Array(cap);
-    this.nrmax = new Float64Array(cap); // largest body radius in the cell
-    this.nleaf = new Int32Array(cap);  // body index, or EMPTY / INTERNAL / CROWD
-    this.nchild = new Int32Array(cap * 4);
+    this.nx = f64(cap);   // cell centre
+    this.ny = f64(cap);
+    this.nh = f64(cap);   // cell half-size
+    this.nm = f64(cap);   // mass in cell
+    this.ncx = f64(cap);  // centre of mass (sum m*x during the build)
+    this.ncy = f64(cap);
+    this.nrmax = f64(cap); // largest body radius in the cell
+    this.nleaf = i32(cap);  // body index, or EMPTY / INTERNAL / CROWD
+    this.nchild = i32(cap * 4);
+    this._shareGen = ++shareGeneration;
   }
 
   _grow() {
@@ -195,6 +212,22 @@ export class NBody {
     const sx = px / mass, sy = py / mass;
     for (let i = 0; i < this.n; i++) { this.vx[i] -= sx; this.vy[i] -= sy; }
     for (let c = 0; c < this.k; c++) { this.cvx[c] -= sx; this.cvy[c] -= sy; }
+  }
+
+  /** Walk the tree on a pool of worker threads from now on (requires shared memory). */
+  setPool(pool) {
+    this.pool = pool;
+    this._shareGenSent = -1;
+  }
+
+  /** The buffers a walker needs, for posting to workers. */
+  sharedBuffers() {
+    const b = (a) => a.buffer;
+    return {
+      x: b(this.x), y: b(this.y), r: b(this.r), ax: b(this.ax), ay: b(this.ay),
+      nx: b(this.nx), ny: b(this.ny), nh: b(this.nh), nm: b(this.nm), ncx: b(this.ncx), ncy: b(this.ncy), nrmax: b(this.nrmax),
+      nleaf: b(this.nleaf), nchild: b(this.nchild), ctrl: b(this._ctrl), touch: b(this._touching),
+    };
   }
 
   /** Visible half-width and half-height in sim units; respawning and escape use them. */
@@ -401,11 +434,9 @@ export class NBody {
     this.stats.nodes = this.nodes;
   }
 
-  _accelerate() {
+  // Core forces (exact) and the tree build; the body-body walk follows, serial or on the pool.
+  _prepareForces() {
     const { n, k, x, y, ax, ay, m, cx, cy, cax, cay, cm, ce2 } = this;
-    const { softening, theta } = this.o;
-    const eps2 = softening * softening;
-    const theta2 = theta * theta;
 
     // cores <-> cores, and cores <-> bodies (exact, pairwise, momentum-conserving)
     for (let c = 0; c < k; c++) { cax[c] = 0; cay[c] = 0; }
@@ -430,55 +461,39 @@ export class NBody {
       }
       ax[i] = axi; ay[i] = ayi;
     }
-    if (n < 2) return;
-
-    // bodies <-> bodies through the tree; touching pairs are noted for _cull to merge
+    this._touchCount = 0;
+    if (n < 2) return false;
     this._buildTree();
-    const { nx, ny, nh, nm, ncx, ncy, nrmax, nleaf, nchild, r } = this;
-    const stack = this._stack;
-    const touching = this._touching;
-    const touchFactor = this.o.touchFactor;
-    touching.length = 0;
-    for (let i = 0; i < n; i++) {
-      const xi = x[i], yi = y[i], ri = r[i];
-      let axi = 0, ayi = 0;
-      let sp = 0;
-      stack[sp++] = 0;
-      while (sp > 0) {
-        const node = stack[--sp];
-        const leaf = nleaf[node];
-        if (leaf === i) continue;
-        const dx = ncx[node] - xi, dy = ncy[node] - yi;
-        const d2 = dx * dx + dy * dy;
-        let open = false;
-        if (leaf === INTERNAL) {
-          // Always open a cell that contains this body (its lump would include the body itself)
-          // or whose box is within touching reach (a contact inside must be seen).
-          const bx = Math.max(Math.abs(xi - nx[node]) - nh[node], 0);
-          const by = Math.max(Math.abs(yi - ny[node]) - nh[node], 0);
-          const reach = touchFactor * (ri + nrmax[node]); // a body in this cell could be touching
-          const s = nh[node] * 2;
-          open = bx * bx + by * by <= reach * reach || s * s >= theta2 * d2;
-        } else if (leaf > i) {
-          const t = touchFactor * (ri + r[leaf]);
-          if (d2 < t * t) touching.push(i, leaf);
-        }
-        if (!open) {
-          const q = d2 + eps2;
-          const f = nm[node] / (q * Math.sqrt(q));
-          axi += f * dx;
-          ayi += f * dy;
-        } else {
-          const c = node * 4;
-          for (let j = 0; j < 4; j++) {
-            const ch = nchild[c + j];
-            if (ch >= 0 && nleaf[ch] !== EMPTY) stack[sp++] = ch;
-          }
-        }
-      }
-      ax[i] += axi;
-      ay[i] += ayi;
+    return true;
+  }
+
+  _walkViews() {
+    return {
+      x: this.x, y: this.y, r: this.r, ax: this.ax, ay: this.ay,
+      nx: this.nx, ny: this.ny, nh: this.nh, nm: this.nm, ncx: this.ncx, ncy: this.ncy, nrmax: this.nrmax,
+      nleaf: this.nleaf, nchild: this.nchild,
+      theta2: this.o.theta * this.o.theta, eps2: this.o.softening * this.o.softening, touchFactor: this.o.touchFactor,
+    };
+  }
+
+  /** Forces on one thread. */
+  _accelerate() {
+    if (!this._prepareForces()) return;
+    this._touchCount = walkRange(this._walkViews(), 0, this.n, this._stack, this._touching, 0, this._touchPer);
+  }
+
+  /** Forces with the tree walk spread over the worker pool. */
+  async _accelerateAsync() {
+    if (!this._prepareForces()) return;
+    const regions = await this.pool.walk(this);
+    // gather each walker's touching pairs into region 0 (they are disjoint by construction)
+    const t = this._touching;
+    let at = 0;
+    for (const [start, count] of regions) {
+      if (start !== at) t.copyWithin(at, start, start + count);
+      at += count;
     }
+    this._touchCount = at;
   }
 
   /** Exact all-pairs body accelerations (cores included) into (outX, outY); tests only. */
@@ -510,6 +525,20 @@ export class NBody {
 
   /** One fixed step of velocity Verlet (kick, drift, kick) for bodies and cores, then escapes. */
   step() {
+    const h = this._beginStep();
+    this._accelerate();
+    this._finishStep(h);
+  }
+
+  /** The same step, with the tree walk on the worker pool. */
+  async stepAsync() {
+    if (!this.pool) { this.step(); return; }
+    const h = this._beginStep();
+    await this._accelerateAsync();
+    this._finishStep(h);
+  }
+
+  _beginStep() {
     const { dt } = this.o;
     const h = dt / 2;
     const { x, y, vx, vy, ax, ay, k, cx, cy, cvx, cvy, cax, cay } = this;
@@ -523,11 +552,16 @@ export class NBody {
       cvx[c] += cax[c] * h; cvy[c] += cay[c] * h;
       cx[c] += cvx[c] * dt; cy[c] += cvy[c] * dt;
     }
-    this._accelerate();
+    return h;
+  }
+
+  _finishStep(h) {
+    const { vx, vy, ax, ay, k, cvx, cvy, cax, cay } = this;
+    const pinned = this.cpinned;
     for (let i = 0; i < this.n; i++) { vx[i] += ax[i] * h; vy[i] += ay[i] * h; }
     for (let c = 0; c < k; c++) { if (!pinned[c]) { cvx[c] += cax[c] * h; cvy[c] += cay[c] * h; } }
     this._cull();
-    this.time += dt;
+    this.time += this.o.dt;
     this.stats.steps++;
   }
 
@@ -622,7 +656,7 @@ export class NBody {
     let changed = false;
     const t = this._touching;
     const chance = this.o.mergeChance;
-    for (let k = 0; k < t.length; k += 2) {
+    for (let k = 0; k < this._touchCount; k += 2) {
       let i = t[k], j = t[k + 1];
       if (dead[i] || dead[j]) continue;
       if (chance < 1 && this.random() >= chance) continue;
