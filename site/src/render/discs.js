@@ -35,10 +35,18 @@ uniform vec3 u_palette[5];
 out vec4 o;
 void main() {
   float d = length(v_p) - v_r;
+  vec3 fill = u_palette[v_c];
+  if (v_r < 1.6) {
+    // tiny bodies: a soft dot of pure colour, so dense regions read as tone rather than grit
+    float s = max(v_r, 0.9);
+    float a = exp(-0.5 * dot(v_p, v_p) / (s * s)) * clamp(0.35 + 0.45 * v_r, 0.0, 0.85);
+    o = vec4(fill, a);
+    return;
+  }
   float cover = 1.0 - smoothstep(-0.5, 0.5, d);
   float ow = clamp(v_r * 0.25, 0.35, 1.0);
   float inner = 1.0 - smoothstep(-ow - 0.5, -ow + 0.5, d);
-  vec3 col = mix(vec3(0.0), u_palette[v_c], inner);
+  vec3 col = mix(vec3(0.0), fill, inner);
   o = vec4(col, cover);
 }`;
 
@@ -131,7 +139,7 @@ function createWebGL(canvas) {
     pad: gl.getUniformLocation(discProg, 'u_pad'),
   };
   gl.uniform3fv(gl.getUniformLocation(discProg, 'u_palette'), new Float32Array(PALETTE.flatMap(hexToRgb)));
-  gl.uniform1f(du.pad, 1.5);
+  gl.uniform1f(du.pad, 2.5);
 
   const quad = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, quad);

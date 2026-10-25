@@ -16,11 +16,12 @@ export default function App() {
   const swarm = Math.min(20000, Math.max(2, Number(params.get('n')) || 3000));
   const threads = params.has('threads') ? Math.max(0, Math.min(16, Number(params.get('threads')) || 0)) : undefined;
   const gpu = params.get('gpu') !== '0';
+  const nebulae = params.get('nebulae') === '1' ? 1 : 2;
   return (
     <>
       <HeaderBar />
       <main className="intro">
-        <NBodyCanvas bodies={bodyCount()} scene={scene} swarm={swarm} threads={threads} gpu={gpu} />
+        <NBodyCanvas bodies={bodyCount()} scene={scene} swarm={swarm} threads={threads} gpu={gpu} nebulae={nebulae} />
         <div className="hero">
           <h1>Robert Hill</h1>
           <Typewriter />

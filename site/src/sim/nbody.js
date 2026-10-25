@@ -32,9 +32,11 @@ export const DEFAULTS = {
   holeHorizon: 1.4,      // Schwarzschild radius of the pointer's hole, in sim units
   holeSoftening: 3,
   lightSpeed: null,      // c, sim units per second (G = 1); null = set so a body holding
-  collapseFraction: 0.08,//   this share of all body mass collapses into a black hole
-  touchFactor: 1,        // bodies merge when closer than touchFactor * (r1 + r2); 0 turns merging off
-  mergeChance: 1,        // probability per step while touching
+  collapseFraction: 1,   //   this share of all body mass collapses into a black hole (1 = effectively never)
+  // Collision cross-section as a multiple of the drawn radii. The drawn disc is a symbol: a star's
+  // real radius is negligible next to its spacing, so stars never touch (0, collisionless). For
+  // planetesimals the drawn size is the physical size (1): contact merges or shatters.
+  touchFactor: 0,
   replaceMerged: false,  // true keeps the population by letting a fresh body in at a nebula's rim per merge
   stickSpeed: 2.5,       // impacts slower than this (relative speed) simply combine
   shatterSpeed: 10,      // by this relative speed the impact is at full intensity
@@ -665,11 +667,9 @@ export class NBody {
     const far2 = far * far;
     let changed = false;
     const t = this._touching;
-    const chance = this.o.mergeChance;
     for (let k = 0; k < this._touchCount; k += 2) {
       let i = t[k], j = t[k + 1];
       if (dead[i] || dead[j]) continue;
-      if (chance < 1 && this.random() >= chance) continue;
       if (m[j] > m[i]) { const s = i; i = j; j = s; }
       const made = this._merge(i, j);
       dead[j] = 1;

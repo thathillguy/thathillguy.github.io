@@ -9,10 +9,13 @@ the cores are integrated exactly. Bodies thrown out of the system are replaced i
 Press and hold anywhere to put a black hole under the pointer: it pulls on everything, swallows
 what reaches it, follows a drag, and vanishes on release.
 
-Bodies can also collide and merge (mass and momentum exact, radius from mass, fragments thrown
-off only by hard impacts between comparable masses, never faster than the energy allows). That is
-on in the two-body test scene at `/?scene=collide` and off in the nebulae, where a disc this dense
-would coagulate away within a minute.
+The nebulae are stars: their drawn size is a symbol, their real radius is negligible next to
+their spacing, so they never touch and the dynamics are collisionless gravity. The scene at
+`/?scene=collide` is planetesimals, whose drawn size is their physical size: contact merges them
+with exact mass and momentum, radius follows from mass, hard impacts between comparable masses
+throw off fragments that carry only energy the inelastic merge destroyed, a body whose
+Schwarzschild radius reaches its own size collapses into a black hole that swallows whole and
+lenses the scene. There are no tuning rules beyond those; what you see is what the physics does.
 
 - `site/src/sim/nbody.js` is the physics. No DOM or React dependencies; tested with `node --test`,
   including a check of the tree's accelerations against the exact all-pairs result.

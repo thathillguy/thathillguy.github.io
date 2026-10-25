@@ -140,7 +140,7 @@ test('a black hole under the pointer pulls bodies in, swallows them, and can be 
 });
 
 test('touching bodies merge: mass and momentum add, count drops by one without fragments', () => {
-  const sim = new NBody({ bodies: 0, nebulae: 1, random: seeded(), density: 1, touchFactor: 1, mergeChance: 1, replaceMerged: false, fragmentFraction: 0 });
+  const sim = new NBody({ bodies: 0, nebulae: 1, random: seeded(), density: 1, touchFactor: 1, replaceMerged: false, fragmentFraction: 0 });
   sim.addBody(30, 0, 0, 10, 1, 0, 0);
   sim.addBody(31.2, 0, 2, 8, 1.2, 1, 0);
   const m0 = sim.m[0] + sim.m[1];
@@ -158,7 +158,7 @@ test('touching bodies merge: mass and momentum add, count drops by one without f
 });
 
 test('a hard impact throws off fragments and conserves total mass and momentum', () => {
-  const sim = new NBody({ bodies: 0, nebulae: 1, nebulaMass: 0, random: seeded(), density: 1, touchFactor: 1, mergeChance: 1 });
+  const sim = new NBody({ bodies: 0, nebulae: 1, nebulaMass: 0, random: seeded(), density: 1, touchFactor: 1 });
   sim.addBody(-2, 0, 6, 0, 1.5, 0, 0);
   sim.addBody(2, 0.5, -6, 0, 1.0, 1, 0);
   const total = (a) => { let m = 0, px = 0, py = 0; for (let i = 0; i < a.n; i++) { m += a.m[i]; px += a.m[i] * a.vx[i]; py += a.m[i] * a.vy[i]; } return [m, px, py]; };
@@ -174,7 +174,7 @@ test('a hard impact throws off fragments and conserves total mass and momentum',
 });
 
 test('a gentle impact simply combines, with no fragments', () => {
-  const sim = new NBody({ bodies: 0, nebulae: 1, nebulaMass: 0, random: seeded(), density: 1, touchFactor: 1, mergeChance: 1 });
+  const sim = new NBody({ bodies: 0, nebulae: 1, nebulaMass: 0, random: seeded(), density: 1, touchFactor: 1 });
   sim.addBody(-2, 0, 0.8, 0, 1.5, 0, 0);
   sim.addBody(2, 0.3, -0.8, 0, 1.0, 1, 0);
   let k = 0; while (sim.stats.merges === 0 && k++ < 2000) sim.step();
@@ -194,7 +194,7 @@ test('a merge never adds energy: the fragment lives off what the inelastic colli
   const rnd = seededBy(5);
   let checked = 0;
   for (let trial = 0; trial < 60; trial++) {
-    const sim = new NBody({ bodies: 0, nebulae: 1, nebulaMass: 0, density: 0.5, touchFactor: 1, mergeChance: 1, random: seededBy(trial + 1) });
+    const sim = new NBody({ bodies: 0, nebulae: 1, nebulaMass: 0, density: 0.5, touchFactor: 1, random: seededBy(trial + 1) });
     const v = 0.5 + 12 * rnd(), dy = (rnd() - 0.5) * 3;
     sim.addBody(-6, -dy / 2, v, (rnd() - 0.5) * 2, 1 + 2 * rnd(), 0, 0);
     sim.addBody(6, dy / 2, -v, (rnd() - 0.5) * 2, 0.5 + 2 * rnd(), 3, 0);
@@ -219,7 +219,7 @@ test('with touchFactor 0 bodies pass through each other', () => {
 });
 
 test('radius is a pure function of mass, before and after merging', () => {
-  const sim = new NBody({ bodies: 500, random: seeded(13), touchFactor: 1, mergeChance: 1, fragmentFraction: 0 });
+  const sim = new NBody({ bodies: 500, random: seeded(13), touchFactor: 1, fragmentFraction: 0 });
   const check = () => { for (let i = 0; i < sim.n; i++) if (!sim.black[i]) assert.ok(Math.abs(sim.r[i] - sim.radiusOf(sim.m[i])) < 1e-6 * sim.r[i]); };
   check();
   let total = 0; for (let i = 0; i < sim.n; i++) total += sim.m[i];
@@ -231,7 +231,7 @@ test('radius is a pure function of mass, before and after merging', () => {
 });
 
 test('a small body hitting a much heavier one is eaten whole, however fast', () => {
-  const sim = new NBody({ bodies: 0, nebulae: 1, nebulaMass: 0, random: seeded(), density: 1, touchFactor: 1, mergeChance: 1 });
+  const sim = new NBody({ bodies: 0, nebulae: 1, nebulaMass: 0, random: seeded(), density: 1, touchFactor: 1 });
   sim.addBody(-3, 0, 12, 0, 0.7, 0, 0);   // mass 0.34
   sim.addBody(3, 0.4, -12, 0, 3.0, 1, 0); // mass 27
   const m0 = sim.m[0] + sim.m[1];
@@ -243,7 +243,7 @@ test('a small body hitting a much heavier one is eaten whole, however fast', () 
 
 test('a body collapses into a black hole once its Schwarzschild radius reaches its size, then eats whole', () => {
   // c chosen so that the merged mass (2.32, radius 1.32, rs 1.35) collapses while each half (1.16, rs 0.68) does not
-  const sim = new NBody({ bodies: 0, nebulae: 1, nebulaMass: 0, random: seeded(), density: 1, touchFactor: 1, mergeChance: 1, lightSpeed: 1.85 });
+  const sim = new NBody({ bodies: 0, nebulae: 1, nebulaMass: 0, random: seeded(), density: 1, touchFactor: 1, lightSpeed: 1.85 });
   sim.addBody(-2, 0, 0.6, 0, 1.05, 0, 0);
   sim.addBody(2, 0.2, -0.6, 0, 1.05, 1, 0);
   assert.ok(schwarzschildRadius(sim.m[0], 1.85) < sim.r[0], 'not a black hole on its own');
@@ -260,4 +260,12 @@ test('a body collapses into a black hole once its Schwarzschild radius reaches i
   assert.equal(sim.count, 1, 'nothing flew off');
   assert.equal(sim.black[0], 1);
   assert.ok(sim.m[0] > m0);
+});
+
+test('stars are collisionless: the nebulae keep every body through a long run', () => {
+  const sim = new NBody({ bodies: 3000, random: seeded(17) });
+  for (let k = 0; k < 120 * 5; k++) sim.step();
+  assert.equal(sim.count, 3000);
+  assert.equal(sim.stats.merges, 0);
+  assert.equal(sim.stats.collapses, 0);
 });

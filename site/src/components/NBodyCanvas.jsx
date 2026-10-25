@@ -7,14 +7,15 @@ import { createDiscRenderer } from '../render/discs.js';
 
 const UNITS = 100;   // the shorter side of the canvas spans this many sim units
 const BUDGET = 10;   // ms of physics per frame before the timestep coarsens
-const TIME_SCALE = 0.6; // sim seconds per real second; lower is calmer
+const TIME_SCALE = 0.5; // sim seconds per real second; lower is calmer
 const STRIDE = 4;    // x, y, radius, colour per body in the GPU buffer
 const LENS_DISTANCE = 6.3; // effective lens-to-source distance in sim units: rE = sqrt(2 rs D)
 const EASE_IN = 0.16, EASE_OUT = 0.24; // seconds for the lens to appear and fade
 
-// Test scene: thousands of small bodies with random drift and a mild pull to the centre, so
-// collisions keep happening. It runs on indefinitely: whatever forms, stays.
-const COLLIDE_OPTS = { bodies: 0, nebulae: 1, nebulaMass: 400, coreFraction: 1, coreSoftening: 25, density: 0.5, touchFactor: 1, mergeChance: 1 };
+// Collision scene: thousands of small planetesimals with random drift and a mild pull to the
+// centre, so contacts keep happening. It runs on indefinitely: whatever forms, stays.
+// Planetesimals: drawn size is physical size, so contact merges or shatters, and the heaviest can collapse.
+const COLLIDE_OPTS = { bodies: 0, nebulae: 1, nebulaMass: 400, coreFraction: 1, coreSoftening: 25, density: 0.5, touchFactor: 1, collapseFraction: 0.08 };
 function setupCollision(sim, count) {
   sim.setCount(0);
   const W = sim.halfW * 0.92, H = sim.halfH * 0.88;
@@ -51,7 +52,7 @@ function setupCollision(sim, count) {
   sim.o.holeSoftening = 2;
 }
 
-export default function NBodyCanvas({ bodies, scene, swarm = 3000, threads, gpu = true }) {
+export default function NBodyCanvas({ bodies, scene, swarm = 3000, threads, gpu = true, nebulae = 2 }) {
   const canvasRef = useRef(null);
   const labelRef = useRef(null);
 
@@ -74,7 +75,8 @@ export default function NBodyCanvas({ bodies, scene, swarm = 3000, threads, gpu 
     const collide = scene === 'collide';
     // Denser spawns get smaller bodies so that the opening moment is a cloud, not a merge burst.
     const sizes = bodies >= 40000 ? { minRadius: 0.03, maxRadius: 0.09 } : {};
-    const driver = new Driver({ bodies, timeScale: TIME_SCALE, halfW: width / 2 / pxPerUnit, halfH: height / 2 / pxPerUnit, ...sizes, ...(collide ? COLLIDE_OPTS : {}) });
+    const layout = nebulae === 1 ? { nebulae: 1, nebulaRadius: 44 } : {}; // one disc, at rest in the middle
+    const driver = new Driver({ bodies, timeScale: TIME_SCALE, halfW: width / 2 / pxPerUnit, halfH: height / 2 / pxPerUnit, ...sizes, ...layout, ...(collide ? COLLIDE_OPTS : {}) });
     const sim = driver.sim;
     if (collide) setupCollision(sim, swarm);
 
@@ -225,7 +227,7 @@ export default function NBodyCanvas({ bodies, scene, swarm = 3000, threads, gpu 
       disposed = true;
       gpuSolver?.destroy();
     };
-  }, [bodies, scene, swarm, threads, gpu]);
+  }, [bodies, scene, swarm, threads, gpu, nebulae]);
 
   return (
     <>
