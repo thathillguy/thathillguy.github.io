@@ -92,52 +92,6 @@ body {
   cursor: crosshair;
 }
 
-/* The black hole under the pointer: a core, a slowly turning broken ring, and a soft shadow */
-.hole {
-  --hole-size: 24px;
-  position: absolute;
-  top: calc(var(--hole-size) / -2);
-  left: calc(var(--hole-size) / -2);
-  width: var(--hole-size);
-  height: var(--hole-size);
-  border-radius: 50%;
-  background: #000;
-  pointer-events: none;
-  opacity: 0;
-  scale: 0.2;
-  transition: opacity 0.22s ease, scale 0.32s cubic-bezier(0.2, 0.9, 0.25, 1.3);
-  will-change: transform;
-}
-
-.hole.on {
-  opacity: 1;
-  scale: 1;
-}
-
-.hole::before {
-  content: "";
-  position: absolute;
-  inset: -34%;
-  border-radius: 50%;
-  border: 1.5px solid rgba(0, 0, 0, 0.45);
-  border-top-color: transparent;
-  border-left-color: transparent;
-  animation: hole-turn 2.4s linear infinite;
-}
-
-.hole::after {
-  content: "";
-  position: absolute;
-  inset: -120%;
-  border-radius: 50%;
-  background: radial-gradient(closest-side, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0.05) 60%, rgba(0, 0, 0, 0));
-}
-
-@keyframes hole-turn {
-  to {
-    rotate: 360deg;
-  }
-}
 
 /* Name card */
 .hero {
@@ -184,12 +138,8 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .caret,
-  .hole::before {
+  .caret {
     animation: none;
-  }
-  .hole {
-    transition: none;
   }
   .topbar nav a {
     transition: none;

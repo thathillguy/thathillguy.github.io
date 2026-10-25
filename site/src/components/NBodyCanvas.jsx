@@ -5,14 +5,14 @@ import { createDiscRenderer } from '../render/discs.js';
 const UNITS = 100;   // the shorter side of the canvas spans this many sim units
 const BUDGET = 10;   // ms of physics per frame before the timestep coarsens
 const STRIDE = 4;    // x, y, radius, colour per body in the GPU buffer
+const EINSTEIN = 4.2; // lensing ring radius in sim units; the dark horizon is the swallow radius
+const EASE_IN = 0.16, EASE_OUT = 0.24; // seconds for the lens to appear and fade
 
 export default function NBodyCanvas({ bodies }) {
   const canvasRef = useRef(null);
-  const holeRef = useRef(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const hole = holeRef.current;
     const renderer = createDiscRenderer(canvas);
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -35,7 +35,6 @@ export default function NBodyCanvas({ bodies }) {
       canvas.height = Math.round(height * dpr);
       renderer.resize(canvas.width, canvas.height, pxPerUnit * dpr);
       sim.setViewport(width / 2 / pxPerUnit, height / 2 / pxPerUnit);
-      hole.style.setProperty('--hole-size', `${2 * sim.o.holeRadius * pxPerUnit}px`);
     };
     fit();
 
@@ -49,18 +48,25 @@ export default function NBodyCanvas({ bodies }) {
       return n;
     };
 
-    const drawOnce = () => {
+    // The lens sits where the pointer is; its strength eases toward 1 while held and 0 after.
+    const lensState = { x: 0, y: 0, k: 0, target: 0 };
+    const drawOnce = (dt = 0) => {
+      const rate = lensState.target > lensState.k ? dt / EASE_IN : dt / EASE_OUT;
+      lensState.k += Math.max(-rate, Math.min(rate, lensState.target - lensState.k));
+      const ease = lensState.k * lensState.k * (3 - 2 * lensState.k);
       renderer.begin();
       renderer.bodies(packed, pack());
+      renderer.lens(lensState.x * dpr, lensState.y * dpr, EINSTEIN * pxPerUnit * dpr, sim.o.holeRadius * pxPerUnit * dpr, ease);
       renderer.end();
     };
 
     let last = performance.now();
     let raf = 0;
     const frame = (now) => {
-      driver.tick((now - last) / 1000, BUDGET);
+      const dt = (now - last) / 1000;
+      driver.tick(dt, BUDGET);
       last = now;
-      drawOnce();
+      drawOnce(dt);
       raf = requestAnimationFrame(frame);
     };
     if (reduceMotion) drawOnce();
@@ -72,16 +78,17 @@ export default function NBodyCanvas({ bodies }) {
       const rect = canvas.getBoundingClientRect();
       const px = e.clientX - rect.left, py = e.clientY - rect.top;
       sim.setHole((px - width / 2) / pxPerUnit, (py - height / 2) / pxPerUnit);
-      hole.style.transform = `translate(${px}px, ${py}px)`;
-      if (reduceMotion) drawOnce();
+      lensState.x = px;
+      lensState.y = py;
+      if (reduceMotion) drawOnce(1);
     };
     const onDown = (e) => {
       if (e.button !== undefined && e.button !== 0) return;
       if (pointerId !== null) return;
       pointerId = e.pointerId;
       canvas.setPointerCapture(e.pointerId);
+      lensState.target = 1;
       place(e);
-      hole.classList.add('on');
     };
     const onMove = (e) => {
       if (e.pointerId === pointerId) place(e);
@@ -90,8 +97,8 @@ export default function NBodyCanvas({ bodies }) {
       if (e.pointerId !== pointerId) return;
       pointerId = null;
       sim.clearHole();
-      hole.classList.remove('on');
-      if (reduceMotion) drawOnce();
+      lensState.target = 0;
+      if (reduceMotion) drawOnce(1);
     };
     canvas.addEventListener('pointerdown', onDown);
     canvas.addEventListener('pointermove', onMove);
@@ -115,10 +122,5 @@ export default function NBodyCanvas({ bodies }) {
     };
   }, [bodies]);
 
-  return (
-    <>
-      <canvas ref={canvasRef} className="nbody" aria-label="Gravity simulation of two colliding nebulae. Press and hold to place a black hole." />
-      <div ref={holeRef} className="hole" aria-hidden="true" />
-    </>
-  );
+  return <canvas ref={canvasRef} className="nbody" aria-label="Gravity simulation of two colliding nebulae. Press and hold to place a black hole." />;
 }
