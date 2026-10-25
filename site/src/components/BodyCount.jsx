@@ -17,8 +17,8 @@ export default function BodyCount({ value, onChange, stats }) {
         />
       </label>
       {stats && (
-        <span className="bodycount-stats" title={`${stats.renderer} · ${stats.stepsPerSecond} physics steps/s at ${stats.stepMs.toFixed(1)} ms each`}>
-          {Math.round(stats.fps)} fps{slow ? ` · sim at ${Math.round(stats.speed * 100)}%` : ''}
+        <span className="bodycount-stats" title={`renderer: ${stats.renderer}`}>
+          {Math.round(stats.fps)} fps · {stats.stepsPerSecond} steps/s · {stats.stepMs.toFixed(1)} ms{slow ? ` · sim at ${Math.round(stats.speed * 100)}%` : ''}
         </span>
       )}
     </div>

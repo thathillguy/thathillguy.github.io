@@ -88,8 +88,6 @@ body {
   width: 100%;
   height: 100%;
   display: block;
-  touch-action: none;
-  cursor: crosshair;
 }
 
 /* Name card */
@@ -134,27 +132,6 @@ body {
   to {
     visibility: hidden;
   }
-}
-
-/* Hint pill */
-.hint {
-  position: absolute;
-  bottom: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  margin: 0;
-  padding: 7px 14px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.06);
-  color: var(--muted);
-  font-size: 12.5px;
-  white-space: nowrap;
-  pointer-events: none;
-  transition: opacity 0.6s ease;
-}
-
-.hint-hidden {
-  opacity: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -210,5 +187,4 @@ body {
 @media (max-width: 640px) {
   .bodycount-stats { display: none; }
   .bodycount input[type="range"] { width: 90px; }
-  .hint { bottom: 72px; }
 }

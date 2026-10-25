@@ -2,11 +2,7 @@
 // WebGL2 instanced quads with a signed-distance circle in the fragment shader; a 2D canvas
 // fallback keeps the page working where WebGL2 is unavailable.
 
-export const PALETTE = [
-  '#E24e42', '#e9b000', '#EB6E80', '#008F95', // bodies
-  '#000000',                                  // 4: black (centre, anchor)
-  '#9a9a9a',                                  // 5: grey (band, predicted path)
-];
+export const PALETTE = ['#E24e42', '#e9b000', '#EB6E80', '#008F95'];
 
 const VS = `#version 300 es
 layout(location = 0) in vec2 a_corner;
@@ -34,7 +30,7 @@ precision mediump float;
 in vec2 v_p;
 in float v_r;
 flat in int v_c;
-uniform vec3 u_palette[6];
+uniform vec3 u_palette[4];
 uniform float u_alpha;
 uniform float u_outline;
 out vec4 o;
@@ -112,7 +108,6 @@ function createWebGL(canvas) {
   };
 
   const bodies = makeInstanceBuffer();
-  const overlay = makeInstanceBuffer();
 
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -137,15 +132,6 @@ function createWebGL(canvas) {
       gl.uniform1f(u.outline, 1);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, bodies.count);
     },
-    /** Draw a small transient set (aim preview) with the given alpha and outline strength. */
-    overlay(data, count, alpha = 1, outline = 1) {
-      if (!count) return;
-      upload(overlay, data, count);
-      bind(overlay);
-      gl.uniform1f(u.alpha, alpha);
-      gl.uniform1f(u.outline, outline);
-      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
-    },
     end() {},
     dispose() {
       // Keep the context alive: a canvas can only ever hand out one kind of context, so a
@@ -153,7 +139,6 @@ function createWebGL(canvas) {
       gl.deleteProgram(prog);
       gl.deleteBuffer(quad);
       gl.deleteBuffer(bodies.buffer);
-      gl.deleteBuffer(overlay.buffer);
       gl.deleteVertexArray(vao);
     },
   };
@@ -191,7 +176,6 @@ function create2D(canvas) {
       if (data) { kept = data.slice(0, count * 4); keptCount = count; }
       if (kept) draw(kept, keptCount, 1, 1);
     },
-    overlay(data, count, alpha = 1, outline = 1) { draw(data, count, alpha, outline); },
     end() {},
     dispose() {},
   };

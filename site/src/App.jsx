@@ -17,7 +17,6 @@ function defaultCount() {
 }
 
 export default function App() {
-  const [touched, setTouched] = useState(false);
   const [count, setCount] = useState(defaultCount);
   const [stats, setStats] = useState(null);
 
@@ -29,14 +28,11 @@ export default function App() {
     <>
       <HeaderBar />
       <main className="intro">
-        <NBodyCanvas bodies={count} onInteract={() => setTouched(true)} onStats={setStats} />
+        <NBodyCanvas bodies={count} onStats={setStats} />
         <div className="hero">
           <h1>Robert Hill</h1>
           <Typewriter />
         </div>
-        <p className={touched ? 'hint hint-hidden' : 'hint'}>
-          Click to add a body &middot; pull back and release to fling one
-        </p>
         <BodyCount value={count} onChange={setCount} stats={stats} />
       </main>
     </>
