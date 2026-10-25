@@ -5,6 +5,7 @@
 // time in seconds; G = 1. Coordinates follow the screen: origin at the centre, y grows downward.
 
 export const COLOURS = ['#E24e42', '#e9b000', '#EB6E80', '#008F95'];
+export const BLACK = 4; // colour index of a collapsed body
 const NEBULA_COLOURS = [[0, 1], [2, 3]]; // each nebula draws from its own pair
 
 export const DEFAULTS = {
@@ -12,18 +13,32 @@ export const DEFAULTS = {
   nebulae: 2,
   nebulaMass: 3000,      // each, unseen core plus bodies
   coreFraction: 0.7,     // share of nebulaMass sitting in the unseen core
-  nebulaRadius: 28,      // disc radius in sim units
+  nebulaRadius: 34,      // disc radius in sim units
+  profile: 0.8,          // body radius within a nebula is R * u^profile: lower is denser at the core
   coreSoftening: 5,      // Plummer softening of the cores (keeps them from slingshotting bodies)
   softening: 1,          // Plummer softening for body-body forces
   separation: 110,       // starting distance between the two cores (their apoapsis)
   periapsis: 25,         // closest approach of the cores' mutual orbit
-  holeMass: 1500,        // the black hole placed under the pointer (a nebula core is 2100)
+  holeMass: null,        // the pointer's black hole; null = whatever mass gives it holeHorizon at this c
+  holeHorizon: 1.4,      // Schwarzschild radius of the pointer's hole, in sim units
   holeSoftening: 3,
-  holeRadius: 1.4,       // bodies inside this are swallowed (and respawn in a nebula)
-  massPerArea: null,     // body mass per radius^2; derived from the masses above unless set (tests)
-  minRadius: 0.12,       // drawn radius; ~1px on a laptop
-  maxRadius: 0.4,
-  theta: 0.75,           // Barnes-Hut opening angle; lower is more accurate and slower
+  lightSpeed: null,      // c, sim units per second (G = 1); null = set so a body holding
+  collapseFraction: 0.08,//   this share of all body mass collapses into a black hole
+  touchFactor: 1,        // bodies merge when closer than touchFactor * (r1 + r2); 0 turns merging off
+  mergeChance: 1,        // probability per step while touching
+  replaceMerged: false,  // true keeps the population by letting a fresh body in at a nebula's rim per merge
+  stickSpeed: 2.5,       // impacts slower than this (relative speed) simply combine
+  shatterSpeed: 10,      // by this relative speed the impact is at full intensity
+  fragmentFraction: 0.35,// at full intensity this share of the smaller body's mass is thrown off (0 = never)
+  fragmentEnergy: 0.5,   // at most this share of the kinetic energy the merge destroys goes into fragments
+  fragmentMinSpeed: 0.8, // fragments that could not get clear are not made
+  eatRatio: 0.1,         // a body lighter than this fraction of the other is simply eaten, however hard it hits
+  fullRatio: 0.4,        // from this mass ratio up, fragmentation is at full strength
+  density: null,         // mass = density * radius^radiusExponent; derived from the masses above unless set
+  radiusExponent: 3,     // 3: radius grows with the cube root of mass, like a solid ball
+  minRadius: 0.05,       // drawn radius; well under a pixel to ~1.3 px on a laptop
+  maxRadius: 0.16,
+  theta: 1.0,            // Barnes-Hut opening angle; lower is more accurate and slower (0.8% rms error here)
   dt: 1 / 120,           // fixed physics step
   maxFrame: 0.05,        // most real time absorbed by one advance() call
   halfW: 80,             // visible half-extents, in sim units (see setViewport)
@@ -33,7 +48,16 @@ export const DEFAULTS = {
 
 const EMPTY = -1, INTERNAL = -2, CROWD = -3; // quadtree leaf states (CROWD: several coincident bodies)
 const MAX_DEPTH = 24;
-const PROFILE = 0.6; // body radius within a nebula is R * u^PROFILE: denser toward the core
+
+/** Schwarzschild radius of a mass m: 2 G m / c^2, with G = 1. */
+export function schwarzschildRadius(m, c) {
+  return (2 * m) / (c * c);
+}
+
+/** The speed of light at which a body of mass m and radius r sits exactly on its horizon. */
+export function collapseLightSpeed(m, r) {
+  return Math.sqrt((2 * m) / r);
+}
 
 /** Speed of a circular orbit at distance rho around a core of mass m with Plummer softening e. */
 export function circularSpeed(m, e, rho) {
@@ -48,31 +72,53 @@ export class NBody {
     this.halfW = this.o.halfW;
     this.halfH = this.o.halfH;
     this.time = 0;
-    this.stats = { escaped: 0, swallowed: 0, steps: 0, nodes: 0 };
+    this.stats = { escaped: 0, swallowed: 0, merges: 0, collapses: 0, steps: 0, nodes: 0 };
     this.hole = null;
+    this._touching = [];
     this._acc = 0;
     this.n = 0;
     this._alloc(Math.max(64, this.o.bodies * 2));
     this._stack = new Int32Array(4096);
     this._initCores();
-    this.massPerArea = this.o.massPerArea ?? 1; // provisional until the population exists
+    this.density = this.o.density ?? 1; // provisional until the population exists
     for (let i = 0; i < this.o.bodies; i++) this._spawnInNebula(i % this.nebulaCount);
-    if (this.o.massPerArea == null) {
-      let sumR2 = 0;
-      for (let i = 0; i < this.n; i++) sumR2 += this.r[i] * this.r[i];
+    if (this.o.density == null) {
+      let sum = 0;
+      for (let i = 0; i < this.n; i++) sum += Math.pow(this.r[i], this.o.radiusExponent);
       const bodyMass = this.k * this.o.nebulaMass * (1 - this.o.coreFraction);
-      this.massPerArea = sumR2 > 0 ? bodyMass / sumR2 : 1;
-      for (let i = 0; i < this.n; i++) this.m[i] = this.massPerArea * this.r[i] * this.r[i];
+      this.density = sum > 0 ? bodyMass / sum : 1;
+      for (let i = 0; i < this.n; i++) this.m[i] = this.massOf(this.r[i]);
     }
+    this._balanceCores();
+    this._setConstants();
     this._accelerate();
+  }
+
+  /** Choose c (and the pointer hole's mass) from the body mass present, unless given explicitly. */
+  _setConstants() {
+    let total = 0;
+    for (let i = 0; i < this.n; i++) total += this.m[i];
+    const critical = this.o.collapseFraction * total;
+    if (this.o.lightSpeed == null) {
+      this.o.lightSpeed = critical > 0 ? collapseLightSpeed(critical, this.radiusOf(critical)) : 46;
+    }
+    if (this.o.holeMass == null) {
+      this.o.holeMass = (this.o.holeHorizon * this.o.lightSpeed ** 2) / 2;
+    }
   }
 
   _alloc(cap) {
     this.cap = cap;
+    // All 64-bit: 32-bit storage measured slower in V8 (each load converts to a double) and
+    // rounding the accelerations breaks the exact pairwise symmetry that conserves momentum.
     for (const k of ['x', 'y', 'vx', 'vy', 'ax', 'ay', 'r', 'm']) this[k] = new Float64Array(cap);
     this.colour = new Uint8Array(cap);
     this.home = new Uint8Array(cap);
+    this.black = new Uint8Array(cap); // 1 for a body that has collapsed into a black hole
     this._dead = new Uint8Array(cap);
+    this._keys = new Float64Array(cap);   // Morton code * 2^20 + index, for sorting
+    this._scratch = new Float64Array(cap);
+    this._scratch8 = new Uint8Array(cap);
     this._allocTree(cap * 4 + 64);
   }
 
@@ -84,12 +130,13 @@ export class NBody {
     this.nm = new Float64Array(cap);   // mass in cell
     this.ncx = new Float64Array(cap);  // centre of mass (sum m*x during the build)
     this.ncy = new Float64Array(cap);
+    this.nrmax = new Float64Array(cap); // largest body radius in the cell
     this.nleaf = new Int32Array(cap);  // body index, or EMPTY / INTERNAL / CROWD
     this.nchild = new Int32Array(cap * 4);
   }
 
   _grow() {
-    const old = { x: this.x, y: this.y, vx: this.vx, vy: this.vy, ax: this.ax, ay: this.ay, r: this.r, m: this.m, colour: this.colour, home: this.home };
+    const old = { x: this.x, y: this.y, vx: this.vx, vy: this.vy, ax: this.ax, ay: this.ay, r: this.r, m: this.m, colour: this.colour, home: this.home, black: this.black };
     this._alloc(this.cap * 2);
     for (const k of Object.keys(old)) this[k].set(old[k]);
   }
@@ -125,6 +172,31 @@ export class NBody {
     }
   }
 
+  // Random orbital velocities never sum to exactly zero: let each core absorb its disc's residual
+  // momentum so every nebula, and the system, starts with the momentum its orbit was designed for.
+  _balanceCores() {
+    for (let c = 0; c < this.nebulaCount; c++) {
+      if (this.cm[c] <= 0) continue;
+      let px = 0, py = 0;
+      for (let i = 0; i < this.n; i++) {
+        if (this.home[i] !== c) continue;
+        px += this.m[i] * (this.vx[i] - this.cvx[c]);
+        py += this.m[i] * (this.vy[i] - this.cvy[c]);
+      }
+      this.cvx[c] -= px / this.cm[c];
+      this.cvy[c] -= py / this.cm[c];
+    }
+    // The discs do not weigh exactly the same, so remove whatever net momentum is left by a
+    // common velocity shift: the system's centre of mass then stays put.
+    let px = 0, py = 0, mass = 0;
+    for (let i = 0; i < this.n; i++) { px += this.m[i] * this.vx[i]; py += this.m[i] * this.vy[i]; mass += this.m[i]; }
+    for (let c = 0; c < this.k; c++) { px += this.cm[c] * this.cvx[c]; py += this.cm[c] * this.cvy[c]; mass += this.cm[c]; }
+    if (mass <= 0) return;
+    const sx = px / mass, sy = py / mass;
+    for (let i = 0; i < this.n; i++) { this.vx[i] -= sx; this.vy[i] -= sy; }
+    for (let c = 0; c < this.k; c++) { this.cvx[c] -= sx; this.cvy[c] -= sy; }
+  }
+
   /** Visible half-width and half-height in sim units; respawning and escape use them. */
   setViewport(halfW, halfH) {
     this.halfW = halfW;
@@ -135,13 +207,18 @@ export class NBody {
     return this.n;
   }
 
+  /** Schwarzschild radius of the pointer's black hole, in sim units. */
+  get holeRadius() {
+    return schwarzschildRadius(this.o.holeMass, this.o.lightSpeed);
+  }
+
   /** Put the black hole at (x, y), creating it if needed. It is pinned: it pulls but does not move. */
   setHole(x, y) {
     if (this.hole == null) {
       const c = (this.hole = this.k++);
       this.cm[c] = this.o.holeMass;
       this.ce2[c] = this.o.holeSoftening * this.o.holeSoftening;
-      this.cabsorb[c] = this.o.holeRadius;
+      this.cabsorb[c] = this.holeRadius; // the event horizon: nothing inside comes back
       this.cpinned[c] = 1;
       this.cvx[c] = 0; this.cvy[c] = 0; this.cax[c] = 0; this.cay[c] = 0;
     }
@@ -171,6 +248,10 @@ export class NBody {
     while (this.n < target) this._spawnInNebula(this.n % this.nebulaCount);
   }
 
+  /** Mass of a body of the given radius, and the radius a body of the given mass draws at. */
+  massOf(radius) { return this.density * Math.pow(radius, this.o.radiusExponent); }
+  radiusOf(mass) { return Math.pow(mass / this.density, 1 / this.o.radiusExponent); }
+
   addBody(x, y, vx, vy, radius, colourIndex, home = 0) {
     if (this.n === this.cap) this._grow();
     const i = this.n++;
@@ -178,9 +259,10 @@ export class NBody {
     this.vx[i] = vx; this.vy[i] = vy;
     this.ax[i] = 0; this.ay[i] = 0;
     this.r[i] = radius;
-    this.m[i] = this.massPerArea * radius * radius;
+    this.m[i] = this.massOf(radius);
     this.colour[i] = colourIndex;
     this.home[i] = home;
+    this.black[i] = 0;
     return i;
   }
 
@@ -192,7 +274,7 @@ export class NBody {
   /** Circular speed at distance rho from a core, counting the disc mass inside rho. */
   _discSpeed(c, rho) {
     const { nebulaMass, coreFraction, coreSoftening, nebulaRadius } = this.o;
-    const enclosed = Math.min(1, Math.pow(rho / nebulaRadius, 1 / PROFILE));
+    const enclosed = Math.min(1, Math.pow(rho / nebulaRadius, 1 / this.o.profile));
     const discMass = nebulaMass * (1 - coreFraction) * enclosed;
     const vCore = circularSpeed(this.cm[c], coreSoftening, rho);
     return Math.sqrt(vCore * vCore + discMass / Math.max(rho, 0.5));
@@ -200,10 +282,24 @@ export class NBody {
 
   // A body in nebula c's disc, on a near-circular orbit about its core, riding with the core.
   _spawnInNebula(c) {
-    const rho = this.o.nebulaRadius * Math.pow(this.random(), PROFILE) + 0.3;
+    const rho = this.o.nebulaRadius * Math.pow(this.random(), this.o.profile) + 0.3;
     const t = 2 * Math.PI * this.random();
     const ux = Math.cos(t), uy = Math.sin(t);
     const v = this.spin[c] * this._discSpeed(c, rho) * (0.96 + 0.08 * this.random());
+    const pair = NEBULA_COLOURS[c % NEBULA_COLOURS.length];
+    this.addBody(
+      this.cx[c] + rho * ux, this.cy[c] + rho * uy,
+      this.cvx[c] - uy * v, this.cvy[c] + ux * v,
+      this._randomRadius(), pair[(this.n >> 1) & 1], c,
+    );
+  }
+
+  // A fresh small body at the outer edge of nebula c, slightly sub-circular so it drifts inward.
+  _spawnAtNebulaRim(c) {
+    const rho = this.o.nebulaRadius * (0.85 + 0.2 * this.random());
+    const t = 2 * Math.PI * this.random();
+    const ux = Math.cos(t), uy = Math.sin(t);
+    const v = this.spin[c] * this._discSpeed(c, rho) * (0.9 + 0.08 * this.random());
     const pair = NEBULA_COLOURS[c % NEBULA_COLOURS.length];
     this.addBody(
       this.cx[c] + rho * ux, this.cy[c] + rho * uy,
@@ -216,37 +312,64 @@ export class NBody {
 
   _newNode(cx, cy, h) {
     if (this.nodes === this.treeCap) {
-      const { nx, ny, nh, nm, ncx, ncy, nleaf, nchild } = this;
+      const { nx, ny, nh, nm, ncx, ncy, nrmax, nleaf, nchild } = this;
       this._allocTree(this.treeCap * 2);
       this.nx.set(nx); this.ny.set(ny); this.nh.set(nh); this.nm.set(nm);
-      this.ncx.set(ncx); this.ncy.set(ncy); this.nleaf.set(nleaf); this.nchild.set(nchild);
+      this.ncx.set(ncx); this.ncy.set(ncy); this.nrmax.set(nrmax); this.nleaf.set(nleaf); this.nchild.set(nchild);
     }
     const k = this.nodes++;
     this.nx[k] = cx; this.ny[k] = cy; this.nh[k] = h;
-    this.nm[k] = 0; this.ncx[k] = 0; this.ncy[k] = 0;
+    this.nm[k] = 0; this.ncx[k] = 0; this.ncy[k] = 0; this.nrmax[k] = 0;
     this.nleaf[k] = EMPTY;
     const c = k * 4;
     this.nchild[c] = this.nchild[c + 1] = this.nchild[c + 2] = this.nchild[c + 3] = -1;
     return k;
   }
 
+  // Reorder the bodies along a Z-order (Morton) curve so that neighbours in space are
+  // neighbours in memory: the tree then builds and walks with far fewer cache misses.
+  _sortMorton(minX, minY, span) {
+    const { n, x, y } = this;
+    const keys = this._keys;
+    const scale = 65535 / span;
+    for (let i = 0; i < n; i++) {
+      let a = ((x[i] - minX) * scale) | 0, b = ((y[i] - minY) * scale) | 0;
+      a = (a | (a << 8)) & 0x00ff00ff; a = (a | (a << 4)) & 0x0f0f0f0f; a = (a | (a << 2)) & 0x33333333; a = (a | (a << 1)) & 0x55555555;
+      b = (b | (b << 8)) & 0x00ff00ff; b = (b | (b << 4)) & 0x0f0f0f0f; b = (b | (b << 2)) & 0x33333333; b = (b | (b << 1)) & 0x55555555;
+      keys[i] = ((a | (b << 1)) >>> 0) * 1048576 + i;
+    }
+    const view = keys.subarray(0, n);
+    view.sort();
+    const tmp = this._scratch, tmp8 = this._scratch8;
+    for (const arr of [this.x, this.y, this.vx, this.vy, this.ax, this.ay, this.r, this.m]) {
+      for (let i = 0; i < n; i++) tmp[i] = arr[view[i] % 1048576];
+      arr.set(tmp.subarray(0, n));
+    }
+    for (const arr of [this.colour, this.home, this.black]) {
+      for (let i = 0; i < n; i++) tmp8[i] = arr[view[i] % 1048576];
+      arr.set(tmp8.subarray(0, n));
+    }
+  }
+
   _buildTree() {
-    const { n, x, y, m } = this;
+    const { n, x, y, m, r } = this;
     this.nodes = 0;
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (let i = 0; i < n; i++) {
       if (x[i] < minX) minX = x[i]; if (x[i] > maxX) maxX = x[i];
       if (y[i] < minY) minY = y[i]; if (y[i] > maxY) maxY = y[i];
     }
+    if (n > 64 && this.stats.steps % 8 === 0) this._sortMorton(minX, minY, Math.max(maxX - minX, maxY - minY, 1e-9));
     const half = Math.max(maxX - minX, maxY - minY, 1) * 0.5 * 1.001 + 1e-6;
     const root = this._newNode((minX + maxX) / 2, (minY + maxY) / 2, half);
-    const { nx, ny, nh, nm, ncx, ncy, nleaf, nchild } = this;
+    const { nx, ny, nh, nm, ncx, ncy, nrmax, nleaf, nchild } = this;
 
     for (let i = 0; i < n; i++) {
-      const xi = x[i], yi = y[i], mi = m[i];
+      const xi = x[i], yi = y[i], mi = m[i], ri = r[i];
       let node = root, depth = 0;
       for (;;) {
         nm[node] += mi; ncx[node] += mi * xi; ncy[node] += mi * yi;
+        if (ri > nrmax[node]) nrmax[node] = ri;
         const leaf = nleaf[node];
         if (leaf === EMPTY) { nleaf[node] = i; break; }
         if (leaf === CROWD) break;
@@ -258,7 +381,7 @@ export class NBody {
           const h = nh[node] * 0.5;
           const child = this._newNode(nx[node] + (q & 1 ? h : -h), ny[node] + (q & 2 ? h : -h), h);
           nchild[node * 4 + q] = child;
-          nm[child] = m[j]; ncx[child] = m[j] * x[j]; ncy[child] = m[j] * y[j];
+          nm[child] = m[j]; ncx[child] = m[j] * x[j]; ncy[child] = m[j] * y[j]; nrmax[child] = r[j];
           nleaf[child] = j;
         }
         const q = (xi > nx[node] ? 1 : 0) + (yi > ny[node] ? 2 : 0);
@@ -309,12 +432,15 @@ export class NBody {
     }
     if (n < 2) return;
 
-    // bodies <-> bodies through the tree
+    // bodies <-> bodies through the tree; touching pairs are noted for _cull to merge
     this._buildTree();
-    const { nh, nm, ncx, ncy, nleaf, nchild } = this;
+    const { nx, ny, nh, nm, ncx, ncy, nrmax, nleaf, nchild, r } = this;
     const stack = this._stack;
+    const touching = this._touching;
+    const touchFactor = this.o.touchFactor;
+    touching.length = 0;
     for (let i = 0; i < n; i++) {
-      const xi = x[i], yi = y[i];
+      const xi = x[i], yi = y[i], ri = r[i];
       let axi = 0, ayi = 0;
       let sp = 0;
       stack[sp++] = 0;
@@ -324,8 +450,20 @@ export class NBody {
         if (leaf === i) continue;
         const dx = ncx[node] - xi, dy = ncy[node] - yi;
         const d2 = dx * dx + dy * dy;
-        const s = nh[node] * 2;
-        if (leaf !== INTERNAL || s * s < theta2 * d2) {
+        let open = false;
+        if (leaf === INTERNAL) {
+          // Always open a cell that contains this body (its lump would include the body itself)
+          // or whose box is within touching reach (a contact inside must be seen).
+          const bx = Math.max(Math.abs(xi - nx[node]) - nh[node], 0);
+          const by = Math.max(Math.abs(yi - ny[node]) - nh[node], 0);
+          const reach = touchFactor * (ri + nrmax[node]); // a body in this cell could be touching
+          const s = nh[node] * 2;
+          open = bx * bx + by * by <= reach * reach || s * s >= theta2 * d2;
+        } else if (leaf > i) {
+          const t = touchFactor * (ri + r[leaf]);
+          if (d2 < t * t) touching.push(i, leaf);
+        }
+        if (!open) {
           const q = d2 + eps2;
           const f = nm[node] / (q * Math.sqrt(q));
           axi += f * dx;
@@ -402,14 +540,101 @@ export class NBody {
     }
   }
 
-  // Drop bodies flung far out of view or swallowed by a black hole, then top the population
-  // back up inside the nebulae.
+  // Heavier body i absorbs j: mass and momentum add exactly; the radius follows from the mass.
+  // Gentle impacts just combine. Harder ones throw off one to three fragments whose share of the
+  // mass, and of the kinetic energy the inelastic merge destroys, grows with the impact intensity.
+  _merge(i, j) {
+    const { x, y, vx, vy, m, r, black } = this;
+    const mi = m[i], mj = m[j], total = mi + mj;
+    const rvx = vx[j] - vx[i], rvy = vy[j] - vy[i];
+    const vrel = Math.hypot(rvx, rvy);
+    x[i] = (x[i] * mi + x[j] * mj) / total;
+    y[i] = (y[i] * mi + y[j] * mj) / total;
+    vx[i] = (vx[i] * mi + vx[j] * mj) / total;
+    vy[i] = (vy[i] * mi + vy[j] * mj) / total;
+    let mass = total;
+    let made = 0; // fragments created
+    const isBlack = black[i] || black[j]; // a black hole swallows whole: nothing comes back out
+
+    const { stickSpeed, shatterSpeed, fragmentFraction, fragmentEnergy, fragmentMinSpeed, eatRatio, fullRatio } = this.o;
+    // Intensity grows with impact speed and fades as the masses diverge: a pebble hitting a boulder is eaten.
+    const speedPart = Math.min(1, Math.max(0, (vrel - stickSpeed) / Math.max(1e-9, shatterSpeed - stickSpeed)));
+    const ratio = Math.min(mi, mj) / Math.max(mi, mj);
+    const ratioPart = Math.min(1, Math.max(0, (ratio - eatRatio) / Math.max(1e-9, fullRatio - eatRatio)));
+    const intensity = isBlack ? 0 : speedPart * ratioPart;
+    if (fragmentFraction > 0 && intensity > 0) {
+      const lost = 0.5 * (mi * mj / total) * vrel * vrel;  // kinetic energy the merge destroys
+      const budget = lost * fragmentEnergy * intensity * (0.4 + 0.6 * this.random());
+      const ejected = fragmentFraction * intensity * Math.min(mi, mj);
+      const count = 1 + Math.floor(intensity * 2.999 * this.random());
+      // split the ejected mass unevenly among the fragments
+      const weights = []; let wsum = 0;
+      for (let f = 0; f < count; f++) { const w = 0.3 + this.random(); weights.push(w); wsum += w; }
+      const rest = total - ejected;
+      const recoil = 1 + ejected / rest; // energy the survivor's recoil will take, roughly
+      let dx0 = -rvy, dy0 = rvx;
+      const len = Math.hypot(dx0, dy0);
+      if (len < 1e-9) { const a = 2 * Math.PI * this.random(); dx0 = Math.cos(a); dy0 = Math.sin(a); } else { dx0 /= len; dy0 /= len; }
+      let pxf = 0, pyf = 0, massOut = 0;
+      for (let f = 0; f < count; f++) {
+        if (f === 0) made = 0;
+        const mf = ejected * weights[f] / wsum;
+        const ef = budget * weights[f] / wsum;
+        const speed = Math.sqrt((2 * ef) / (mf * recoil));
+        if (speed < fragmentMinSpeed) continue; // too slow to get clear: stays in the survivor
+        const side = f % 2 === 0 ? 1 : -1;
+        const a = (this.random() - 0.5) * 2.1, c = Math.cos(a), sn = Math.sin(a); // about +/- 60 degrees
+        const ux = side * (dx0 * c - dy0 * sn), uy = side * (dx0 * sn + dy0 * c);
+        const rf = this.radiusOf(mf);
+        const gap = this.radiusOf(rest) + rf + 0.15 + 0.6 * f;
+        const k = this.addBody(x[i] + ux * gap, y[i] + uy * gap, vx[i] + ux * speed, vy[i] + uy * speed, rf, this.colour[j], this.home[j]);
+        this.m[k] = mf;
+        pxf += mf * ux * speed; pyf += mf * uy * speed;
+        massOut += mf;
+        made++;
+      }
+      mass = total - massOut;
+      // recoil keeps momentum exact
+      vx[i] -= pxf / mass;
+      vy[i] -= pyf / mass;
+    }
+    m[i] = mass;
+    // Collapse: once the Schwarzschild radius reaches the body's own size, it is a black hole.
+    const rs = schwarzschildRadius(mass, this.o.lightSpeed);
+    if (isBlack || rs >= this.radiusOf(mass)) {
+      if (!black[i]) this.stats.collapses++;
+      black[i] = 1;
+      this.colour[i] = BLACK;
+      r[i] = rs;
+    } else {
+      r[i] = this.radiusOf(mass);
+    }
+    return made;
+  }
+
+  // Merge touching bodies, drop bodies flung far out of view or swallowed by a black hole,
+  // then top the population back up inside the nebulae.
   _cull() {
     const { x, y, r, m, colour, home } = this;
     const dead = this._dead;
     const far = 3 * Math.max(this.halfW, this.halfH);
     const far2 = far * far;
     let changed = false;
+    const t = this._touching;
+    const chance = this.o.mergeChance;
+    for (let k = 0; k < t.length; k += 2) {
+      let i = t[k], j = t[k + 1];
+      if (dead[i] || dead[j]) continue;
+      if (chance < 1 && this.random() >= chance) continue;
+      if (m[j] > m[i]) { const s = i; i = j; j = s; }
+      const made = this._merge(i, j);
+      dead[j] = 1;
+      this.stats.merges++;
+      // The population target follows the real change (one body gone, fragments added), so
+      // merging never triggers a respawn; set replaceMerged to refill from the rim instead.
+      if (!this.o.replaceMerged) this.o.bodies = Math.max(0, this.o.bodies - 1 + made);
+      changed = true;
+    }
     for (let i = 0; i < this.n; i++) {
       if (x[i] * x[i] + y[i] * y[i] > far2) { dead[i] = 1; this.stats.escaped++; changed = true; }
     }
@@ -428,12 +653,12 @@ export class NBody {
         x[w] = x[i]; y[w] = y[i];
         this.vx[w] = this.vx[i]; this.vy[w] = this.vy[i];
         this.ax[w] = this.ax[i]; this.ay[w] = this.ay[i];
-        r[w] = r[i]; m[w] = m[i]; colour[w] = colour[i]; home[w] = home[i];
+        r[w] = r[i]; m[w] = m[i]; colour[w] = colour[i]; home[w] = home[i]; this.black[w] = this.black[i];
       }
       w++;
     }
     this.n = w;
-    while (this.n < this.o.bodies) this._spawnInNebula(Math.floor(this.random() * this.nebulaCount));
+    while (this.n < this.o.bodies) this._spawnAtNebulaRim(Math.floor(this.random() * this.nebulaCount));
   }
 
   /** Total momentum of bodies and cores, for tests. */

@@ -9,6 +9,11 @@ the cores are integrated exactly. Bodies thrown out of the system are replaced i
 Press and hold anywhere to put a black hole under the pointer: it pulls on everything, swallows
 what reaches it, follows a drag, and vanishes on release.
 
+Bodies can also collide and merge (mass and momentum exact, radius from mass, fragments thrown
+off only by hard impacts between comparable masses, never faster than the energy allows). That is
+on in the two-body test scene at `/?scene=collide` and off in the nebulae, where a disc this dense
+would coagulate away within a minute.
+
 - `site/src/sim/nbody.js` is the physics. No DOM or React dependencies; tested with `node --test`,
   including a check of the tree's accelerations against the exact all-pairs result.
 - `site/src/sim/driver.js` runs it in real time within a per-frame budget and adapts the timestep

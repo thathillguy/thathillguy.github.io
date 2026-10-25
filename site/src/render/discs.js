@@ -3,7 +3,7 @@
 // WebGL2 instanced quads with a signed-distance circle in the fragment shader; a 2D canvas
 // fallback keeps the page working where WebGL2 is unavailable.
 
-export const PALETTE = ['#E24e42', '#e9b000', '#EB6E80', '#008F95'];
+export const PALETTE = ['#E24e42', '#e9b000', '#EB6E80', '#008F95', '#000000'];
 
 const DISC_VS = `#version 300 es
 layout(location = 0) in vec2 a_corner;
@@ -31,7 +31,7 @@ precision mediump float;
 in vec2 v_p;
 in float v_r;
 flat in int v_c;
-uniform vec3 u_palette[4];
+uniform vec3 u_palette[5];
 out vec4 o;
 void main() {
   float d = length(v_p) - v_r;
@@ -52,32 +52,47 @@ void main() {
 
 // Thin-lens bending: a pixel at image position p shows the source at p - d_hat * rE^2 / r.
 // The Einstein radius rE maps the hole's centre onto a ring; inside it the image inverts.
+const MAX_LENSES = 8;
 const LENS_FS = `#version 300 es
 precision highp float;
 in vec2 v_uv;
 uniform sampler2D u_scene;
 uniform vec2 u_res;
-uniform vec2 u_hole;
-uniform float u_rE;
-uniform float u_rH;
-uniform float u_k;
+uniform int u_count;
+uniform vec4 u_holes[8]; // x, y (device px, y up), rE, rH
+uniform float u_k[8];
 out vec4 o;
 void main() {
   vec2 p = v_uv * u_res;
-  if (u_k <= 0.0) { o = texture(u_scene, v_uv); return; }
-  vec2 d = p - u_hole;
-  float r = max(length(d), 1e-3);
-  float rE = u_rE * u_k;
-  float rH = u_rH * u_k;
-  vec2 src = p - d / r * (rE * rE / r);
+  if (u_count == 0) { o = texture(u_scene, v_uv); return; }
+  // weak-field deflections add; sample the scene where the light came from
+  vec2 src = p;
+  for (int h = 0; h < 8; h++) {
+    if (h >= u_count) break;
+    vec2 d = p - u_holes[h].xy;
+    float r = max(length(d), 1e-3);
+    float rE = u_holes[h].z * u_k[h];
+    src -= d / r * (rE * rE / r);
+  }
   vec3 col = texture(u_scene, src / u_res).rgb;
   if (any(lessThan(src, vec2(0.0))) || any(greaterThan(src, u_res))) col = vec3(1.0);
-  float ring = exp(-pow((r - rE) / (0.10 * rE + 0.6), 2.0)) * 0.28 * u_k;
-  col = mix(col, vec3(0.0), ring);
-  float halo = exp(-r / (rE * 1.6)) * 0.10 * u_k;
-  col = mix(col, vec3(0.0), halo);
-  float core = 1.0 - smoothstep(rH * 0.85, rH * 1.15, r);
-  col = mix(col, vec3(0.0), core);
+  for (int h = 0; h < 8; h++) {
+    if (h >= u_count) break;
+    float k = u_k[h];
+    vec2 d = p - u_holes[h].xy;
+    float r = max(length(d), 1e-3);
+    float rE = u_holes[h].z * k;
+    float rH = u_holes[h].w * k;
+    float ring = exp(-pow((r - rE) / (0.10 * rE + 0.6), 2.0)) * 0.28 * k;
+    col = mix(col, vec3(0.0), ring);
+    float halo = exp(-r / (rE * 1.6)) * 0.10 * k;
+    col = mix(col, vec3(0.0), halo);
+    // photon sphere at 1.5 rs: a thin dark ring just outside the horizon
+    float photon = exp(-pow((r - 1.5 * rH) / (0.35 + 0.05 * rH), 2.0)) * 0.55 * k;
+    col = mix(col, vec3(0.0), photon);
+    float core = 1.0 - smoothstep(rH * 0.92, rH * 1.08, r);
+    col = mix(col, vec3(0.0), core);
+  }
   o = vec4(col, 1.0);
 }`;
 
@@ -139,11 +154,12 @@ function createWebGL(canvas) {
   const lu = {
     scene: gl.getUniformLocation(lensProg, 'u_scene'),
     res: gl.getUniformLocation(lensProg, 'u_res'),
-    hole: gl.getUniformLocation(lensProg, 'u_hole'),
-    rE: gl.getUniformLocation(lensProg, 'u_rE'),
-    rH: gl.getUniformLocation(lensProg, 'u_rH'),
+    count: gl.getUniformLocation(lensProg, 'u_count'),
+    holes: gl.getUniformLocation(lensProg, 'u_holes'),
     k: gl.getUniformLocation(lensProg, 'u_k'),
   };
+  const holeData = new Float32Array(MAX_LENSES * 4);
+  const holeK = new Float32Array(MAX_LENSES);
   gl.uniform1i(lu.scene, 0);
   const lensVao = gl.createVertexArray();
   gl.bindVertexArray(lensVao);
@@ -164,7 +180,7 @@ function createWebGL(canvas) {
 
   gl.clearColor(1, 1, 1, 1);
   let width = 1, height = 1;
-  const lens = { x: 0, y: 0, rE: 0, rH: 0, k: 0 };
+  let lensCount = 0;
 
   return {
     kind: 'webgl2',
@@ -201,9 +217,14 @@ function createWebGL(canvas) {
       }
       if (inst.count) gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, inst.count);
     },
-    /** Lens the frame around (x, y) in device pixels, y down; k in 0..1 is the strength. */
-    lens(x, y, rE, rH, k) {
-      lens.x = x; lens.y = height - y; lens.rE = rE; lens.rH = rH; lens.k = k;
+    /** Lenses for this frame: [{ x, y, rE, rH, k }] in device pixels (y down), at most 8. */
+    lens(list) {
+      lensCount = Math.min(list.length, MAX_LENSES);
+      for (let i = 0; i < lensCount; i++) {
+        const l = list[i];
+        holeData[i * 4] = l.x; holeData[i * 4 + 1] = height - l.y; holeData[i * 4 + 2] = l.rE; holeData[i * 4 + 3] = l.rH;
+        holeK[i] = l.k;
+      }
     },
     end() {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -213,11 +234,11 @@ function createWebGL(canvas) {
       gl.bindVertexArray(lensVao);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.uniform2f(lu.hole, lens.x, lens.y);
-      gl.uniform1f(lu.rE, lens.rE);
-      gl.uniform1f(lu.rH, lens.rH);
-      gl.uniform1f(lu.k, lens.k);
+      gl.uniform1i(lu.count, lensCount);
+      gl.uniform4fv(lu.holes, holeData);
+      gl.uniform1fv(lu.k, holeK);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      lensCount = 0;
     },
     dispose() {
       // Keep the context alive: a canvas can only ever hand out one kind of context, so a
@@ -239,7 +260,7 @@ function create2D(canvas) {
   if (!ctx) throw new Error('canvas has no usable rendering context');
   let width = 1, height = 1, ppu = 1;
   let kept = null, keptCount = 0;
-  const lens = { x: 0, y: 0, rH: 0, k: 0 };
+  let lenses = [];
   const TAU = Math.PI * 2;
   return {
     kind: '2d',
@@ -263,13 +284,11 @@ function create2D(canvas) {
         if (r > 1.5) ctx.stroke();
       }
     },
-    lens(x, y, rE, rH, k) { lens.x = x; lens.y = y; lens.rH = rH; lens.k = k; },
+    lens(list) { lenses = list; },
     end() {
-      if (lens.k <= 0) return;
       ctx.fillStyle = '#000';
-      ctx.beginPath();
-      ctx.arc(lens.x, lens.y, lens.rH * lens.k, 0, TAU);
-      ctx.fill();
+      for (const l of lenses) { if (l.k <= 0) continue; ctx.beginPath(); ctx.arc(l.x, l.y, l.rH * l.k, 0, TAU); ctx.fill(); }
+      lenses = [];
     },
     dispose() {},
   };
