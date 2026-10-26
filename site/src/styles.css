@@ -92,15 +92,15 @@ body {
   cursor: crosshair;
 }
 
-/* The about card is laid out in the top 40% of the second screen and floats as a boat once
-   the fluid fills the 60% below it (NBodyCanvas moves `.boat`; `.boat-slot` keeps its place). */
+/* The about card is laid out near the top of the second screen and floats as a boat once the
+   fluid fills the lower 40% (NBodyCanvas moves `.boat`; `.boat-slot` keeps its place). */
 .about {
   position: relative;
   min-height: 100vh;
   min-height: 100dvh;
   display: flex;
   justify-content: center;
-  padding: calc(56px + 4vh) 24px 60vh;
+  padding: calc(56px + 6vh) 24px 40vh;
 }
 
 .boat-slot {

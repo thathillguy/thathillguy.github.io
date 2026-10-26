@@ -118,13 +118,13 @@ test('a black hole under the pointer pulls stars in, swallows them, and can be r
   assert.equal(sim.count, 2000);
 });
 
-test('a fall pools the stars as a fluid filling about 60% of the height, and coming back rewinds the same stars exactly', () => {
+test('a fall pools the stars as a fluid filling about 40% of the height, and coming back rewinds the same stars exactly', () => {
   const sim = new NBody({ bodies: 8000, random: seeded(5), halfW: 20, halfH: 14, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
   for (let k = 0; k < 60; k++) sim.step();
   const before = { x: sim.x.slice(0, sim.n), y: sim.y.slice(0, sim.n), vx: sim.vx.slice(0, sim.n), e: sim.energy() };
   sim.setFall(1);
   for (let k = 0; k < 60 * 8; k++) sim.step();
-  // every star inside the walls, and the pool's surface near 60% of the height
+  // every star inside the walls, and the pool's surface near 40% of the height
   let inside = 0;
   const ys = [];
   for (let i = 0; i < sim.n; i++) {
@@ -135,7 +135,7 @@ test('a fall pools the stars as a fluid filling about 60% of the height, and com
   ys.sort((a, b) => a - b);
   const surface = ys[Math.floor(0.05 * ys.length)]; // the top 5% is spray
   const depth = (sim.halfH - surface) / (2 * sim.halfH);
-  assert.ok(depth > 0.5 && depth < 0.72, `pool depth ${depth.toFixed(2)} of the height`);
+  assert.ok(depth > 0.32 && depth < 0.5, `pool depth ${depth.toFixed(2)} of the height`);
   assert.equal(sim.count, 8000);
   sim.setFall(0);
   assert.ok(sim.rewind, 'a rewind starts');

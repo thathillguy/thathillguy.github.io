@@ -19,7 +19,7 @@ export const DEFAULTS = {
   nebulaRadius: 42,      // where a nebula's disc is truncated, in sim units
   scaleLength: 12,       // exponential disc scale length: surface density falls as exp(-r / h)
   dispersion: 0.08,      // random radial / tangential velocity kick, as a fraction of circular speed
-  poolFraction: 0.6,     // when the page falls, the fluid fills this much of the viewport's height
+  poolFraction: 0.4,     // when the page falls, the fluid fills this much of the viewport's height
   coreSoftening: 5,      // Plummer softening of the cores
   softening: 1,          // Plummer softening between stars
   separation: 110,       // starting distance between the two cores (their apoapsis)
