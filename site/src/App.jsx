@@ -2,6 +2,9 @@ import { useRef } from 'react';
 import HeaderBar from './components/HeaderBar.jsx';
 import NBodyCanvas from './components/NBodyCanvas.jsx';
 import Typewriter from './components/Typewriter.jsx';
+import { HULL_SHAPE } from './sim/fluid.js';
+
+const HULL_POINTS = HULL_SHAPE.map(([u, v]) => `${u * 100},${v * 100}`).join(' ');
 
 // The star count is measured at startup; `?stars=N` pins it and `?gpu=0` forces the CPU path.
 const query = new URLSearchParams(window.location.search);
@@ -25,18 +28,20 @@ export default function App() {
         <div className="boat-slot">
         <div ref={boat} className="boat">
         <svg className="hull" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-          <polygon points="0,0 100,0 88,100 12,100" vectorEffect="non-scaling-stroke" />
+          <polygon points={HULL_POINTS} vectorEffect="non-scaling-stroke" />
         </svg>
         <h2>About</h2>
-        <p>
-          I'm Robert, a software engineer at [company] in [city], where I [what you do, in one
-          line]. Before that I [previous thing worth a line]. I like problems that sit between
-          data and product, and I like building things that move.
-        </p>
-        <p>
-          The galaxies above are 100,000 stars under gravity, computed on your GPU every frame.
-          Some version of this simulation has lived on this page since 2017.
-        </p>
+        <div className="deck">
+          <p>
+            I'm Robert, a software engineer at [company] in [city], where I [what you do, in one
+            line]. Before that I [previous thing worth a line]. I like problems that sit between
+            data and product, and I like building things that move.
+          </p>
+          <p>
+            The galaxies above are 100,000 stars under gravity, computed on your GPU every frame.
+            Some version of this simulation has lived on this page since 2017.
+          </p>
+        </div>
         <p className="links">
           <a href="mailto:[email]">Email</a>
           <a href="/resume.pdf">Resume</a>

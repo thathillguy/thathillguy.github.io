@@ -4,7 +4,7 @@
 //
 // Body layout, shared with the renderer: vec4 (x, y, mass, radius) per star.
 
-import { HULL_MARGIN, HULL_TAPER } from './fluid.js';
+import { HULL_MARGIN } from './fluid.js';
 
 const WG = 256;
 const MAX_CORES = 4;
@@ -120,8 +120,10 @@ struct FParams {
   bounce: f32, hx: f32, hy: f32, hm: f32,
   he2: f32, useAcc: f32, bx: f32, by: f32,
   bc: f32, bs: f32, bhw: f32, bhh: f32,
-  bvx: f32, bvy: f32, hasBoat: f32, taper: f32,
+  bvx: f32, bvy: f32, hasBoat: f32, margin: f32,
 }
+// the ship's profile, as fractions of its box (HULL_SHAPE in fluid.js)
+const SHAPE = array<vec2<f32>, 5>(vec2<f32>(0.0, 0.0), vec2<f32>(0.92, 0.0), vec2<f32>(1.0, 0.4), vec2<f32>(0.86, 1.0), vec2<f32>(0.06, 1.0));
 @group(0) @binding(0) var<uniform> q: FParams;
 @group(0) @binding(1) var<storage, read_write> body: array<vec4<f32>>;
 @group(0) @binding(2) var<storage, read_write> vel: array<vec2<f32>>;
@@ -242,15 +244,18 @@ fn fluid(@builtin(global_invocation_id) gid: vec3<u32>) {
     // (the same test as hullPush in fluid.js)
     let d = np - vec2<f32>(q.bx, q.by);
     let l = vec2<f32>(q.bc * d.x + q.bs * d.y, -q.bs * d.x + q.bc * d.y);
-    let hw = q.bhw; let hh = q.bhh;
-    let half = hw - q.taper * hw * ((l.y + hh) / hh);
-    if (abs(l.y) < hh && abs(l.x) < half) {
-      let k = q.taper * hw / hh;
-      let inv = inverseSqrt(1.0 + 0.25 * k * k);
-      var dist = l.y + hh; var nl = vec2<f32>(0.0, -1.0);
-      let dB = hh - l.y; if (dB < dist) { dist = dB; nl = vec2<f32>(0.0, 1.0); }
-      let dR = (half - l.x) * inv; if (dR < dist) { dist = dR; nl = vec2<f32>(inv, 0.5 * k * inv); }
-      let dL = (half + l.x) * inv; if (dL < dist) { dist = dL; nl = vec2<f32>(-inv, 0.5 * k * inv); }
+    let box = vec2<f32>(q.bhw, q.bhh);
+    var inside = true; var dist = 1e9; var nl = vec2<f32>(0.0, -1.0);
+    for (var k = 0u; k < 5u; k++) {
+      let p0 = (2.0 * SHAPE[k] - 1.0) * box;
+      let p1 = (2.0 * SHAPE[(k + 1u) % 5u] - 1.0) * box;
+      let e = p1 - p0;
+      let nrm = normalize(vec2<f32>(e.y, -e.x));
+      let sd = dot(l - p0, nrm) - q.margin;
+      if (sd >= 0.0) { inside = false; }
+      if (-sd < dist) { dist = -sd; nl = nrm; }
+    }
+    if (inside) {
       let wn = vec2<f32>(q.bc * nl.x - q.bs * nl.y, q.bs * nl.x + q.bc * nl.y);
       np += wn * dist;
       let rel = dot(v - vec2<f32>(q.bvx, q.bvy), wn);
@@ -369,7 +374,7 @@ export function createGpuEngine(device, sim) {
     new Float32Array(fdata, 16, 28).set([
       f.h, f.ox, f.oy, f.rho0, o.K, o.cohesion, o.visc, o.g, sim.fall, sim.o.dt / o.substeps, sim.halfW, sim.halfH, o.bounce,
       hole == null ? 0 : sim.cx[hole], hole == null ? 0 : sim.cy[hole], hole == null ? 0 : sim.cm[hole], hole == null ? 1 : sim.ce2[hole], useAcc ? 1 : 0,
-      b ? b.x : 0, b ? b.y : 0, b ? b.c : 1, b ? b.s : 0, b ? b.hw + HULL_MARGIN : 0, b ? b.hh + HULL_MARGIN : 0, b ? b.vx : 0, b ? b.vy : 0, b ? 1 : 0, HULL_TAPER,
+      b ? b.x : 0, b ? b.y : 0, b ? b.c : 1, b ? b.s : 0, b ? b.hw : 0, b ? b.hh : 0, b ? b.vx : 0, b ? b.vy : 0, b ? 1 : 0, HULL_MARGIN,
     ]);
     device.queue.writeBuffer(fparams, 0, fdata);
   };

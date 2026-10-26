@@ -5,26 +5,49 @@
 // The GPU engine runs the same scheme in compute shaders (see gpu.js).
 
 export const HULL_MARGIN = 0.6; // stars keep this far from the boat's edges
-export const HULL_TAPER = 0.12; // each side of the hull slopes in by this fraction of its width, top to bottom
 
 /**
- * For a point (lx, ly) in the hull's frame (y down, origin at the centre of its box), the
- * smallest distance to a face if the point is inside the tapered hull, with that face's outward
- * normal; null outside. The hull is hw wide at the deck, hw * (1 - 2 taper) at the bottom.
+ * The ship's profile as fractions of its box (x right, y down), clockwise from the top-left:
+ * a flat deck, a bow that rakes forward to a point then falls back to the keel, a flat keel,
+ * and a nearly upright stern. Convex. The outline, both fluid solvers and the buoyancy use it.
  */
-export function hullPush(lx, ly, hw, hh, taper = HULL_TAPER) {
-  if (Math.abs(ly) >= hh) return null;
-  const k = (taper * hw) / hh;          // the sides' inward slope per unit of depth, times 2
-  const half = hw - taper * hw * ((ly + hh) / hh); // half-width at this depth
-  if (Math.abs(lx) >= half) return null;
-  const inv = 1 / Math.hypot(1, k / 2);
-  const dTop = ly + hh, dBottom = hh - ly;
-  const dRight = (half - lx) * inv, dLeft = (half + lx) * inv;
-  let d = dTop, nx = 0, ny = -1;
-  if (dBottom < d) { d = dBottom; nx = 0; ny = 1; }
-  if (dRight < d) { d = dRight; nx = inv; ny = (k / 2) * inv; }
-  if (dLeft < d) { d = dLeft; nx = -inv; ny = (k / 2) * inv; }
-  return { d, nx, ny };
+export const HULL_SHAPE = [[0, 0], [0.92, 0], [1, 0.4], [0.86, 1], [0.06, 1]];
+
+/** The hull's edges in local units for a box of half-size (hw, hh): start point, unit outward normal, length. */
+export function hullEdges(hw, hh) {
+  const n = HULL_SHAPE.length, edges = [];
+  for (let k = 0; k < n; k++) {
+    const [u0, v0] = HULL_SHAPE[k], [u1, v1] = HULL_SHAPE[(k + 1) % n];
+    const x0 = (2 * u0 - 1) * hw, y0 = (2 * v0 - 1) * hh, x1 = (2 * u1 - 1) * hw, y1 = (2 * v1 - 1) * hh;
+    const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy);
+    edges.push({ x0, y0, x1, y1, nx: dy / len, ny: -dx / len, len }); // clockwise on a y-down screen: outward is (dy, -dx)
+  }
+  return edges;
+}
+
+/** Signed area of the hull in local units (positive). */
+export function hullArea(hw, hh) {
+  let a = 0;
+  const n = HULL_SHAPE.length;
+  for (let k = 0; k < n; k++) {
+    const [u0, v0] = HULL_SHAPE[k], [u1, v1] = HULL_SHAPE[(k + 1) % n];
+    a += (2 * u0 - 1) * hw * (2 * v1 - 1) * hh - (2 * u1 - 1) * hw * (2 * v0 - 1) * hh;
+  }
+  return Math.abs(a) / 2;
+}
+
+/**
+ * For a point (lx, ly) in the hull's frame, the distance out through the nearest face and that
+ * face's outward normal if the point is inside the hull grown by `margin`; null outside.
+ */
+export function hullPush(lx, ly, hw, hh, margin = 0) {
+  let best = null;
+  for (const e of hullEdges(hw, hh)) {
+    const sd = (lx - e.x0) * e.nx + (ly - e.y0) * e.ny - margin; // signed distance, negative inside
+    if (sd >= 0) return null;
+    if (!best || -sd < best.d) best = { d: -sd, nx: e.nx, ny: e.ny };
+  }
+  return best;
 }
 
 export const FLUID = {
@@ -154,7 +177,7 @@ export class Fluid {
         // inside the hull? push out through the nearest face, taking the hull's velocity
         const dx = px - hull.x, dy = py - hull.y;
         const lx = hull.c * dx + hull.s * dy, ly = -hull.s * dx + hull.c * dy;
-        const hit = hullPush(lx, ly, hull.hw + HULL_MARGIN, hull.hh + HULL_MARGIN);
+        const hit = hullPush(lx, ly, hull.hw, hull.hh, HULL_MARGIN);
         if (hit) {
           const wnx = hull.c * hit.nx - hull.s * hit.ny, wny = hull.s * hit.nx + hull.c * hit.ny;
           px += wnx * hit.d; py += wny * hit.d;

@@ -4,14 +4,14 @@
 // motion; gravity. The fluid treats the hull as a solid wall (see fluid.js and gpu.js).
 // Units are the simulation's; y points down.
 
-import { HULL_TAPER } from './fluid.js';
+import { hullEdges, hullArea } from './fluid.js';
 
 const K_SURFACE = 8;   // the k-th highest star in a column marks the surface (the rest is spray)
 const COLUMN = 4;      // width of the surface-measuring columns beside the hull
 
 export class Boat {
   constructor(o = {}) {
-    this.sigma = o.sigma ?? 0.55; // density relative to the fluid: the fraction of the height submerged at rest
+    this.sigma = o.sigma ?? 0.42; // density relative to the fluid: the fraction of the height submerged at rest
     this.drag = o.drag ?? 2.5;    // 1/s, toward the water's velocity, along
     this.heave = o.heave ?? 6;    // 1/s, up and down: water resists a hull bobbing far more than sliding
     this.spin = o.spin ?? 6.0;    // 1/s, angular damping
@@ -75,10 +75,8 @@ export class Boat {
     const xl = (xl0 + xl1) / 2, xr = (xr0 + xr1) / 2;
     const surfaceAt = (wx) => yl + ((yr - yl) * (wx - xl)) / (xr - xl);
 
-    // pressure on the hull's bottom and tapered sides, hydrostatic below the interpolated surface
-    const W = 2 * hw, H = 2 * hh, taper = HULL_TAPER;
-    const Wb = W * (1 - 2 * taper);            // width at the bottom
-    const A = (H * (W + Wb)) / 2;
+    // pressure on every face of the hull but the deck, hydrostatic below the interpolated surface
+    const W = 2 * hw, H = 2 * hh, A = hullArea(hw, hh);
     let fx = 0, fy = 0, tq = 0, wet = 0;
     const sample = (lx, ly, nx, ny, ds) => {
       const wx = x + c * lx - s * ly, wy = y + s * lx + c * ly;   // world point
@@ -91,14 +89,13 @@ export class Boat {
       tq += (wx - x) * dfy - (wy - y) * dfx;
       wet += ds;
     };
-    const NB = 12, NS = 4;
-    for (let i = 0; i < NB; i++) sample(-Wb / 2 + (Wb * (i + 0.5)) / NB, hh, 0, 1, Wb / NB);
-    const slope = (taper * W) / H;             // the sides lean in by this much per unit of depth
-    const inv = 1 / Math.hypot(1, slope), ds = (H / NS) / inv;
-    for (let i = 0; i < NS; i++) {
-      const t = (i + 0.5) / NS, ly = -hh + H * t, half = hw - taper * W * t;
-      sample(-half, ly, -inv, slope * inv, ds);
-      sample(half, ly, inv, slope * inv, ds);
+    for (const e of hullEdges(hw, hh)) {
+      if (e.ny < -0.9) continue; // the deck
+      const N = Math.max(2, Math.round(e.len / (W / 12)));
+      for (let i = 0; i < N; i++) {
+        const t = (i + 0.5) / N;
+        sample(e.x0 + (e.x1 - e.x0) * t, e.y0 + (e.y1 - e.y0) * t, e.nx, e.ny, e.len / N);
+      }
     }
     const m = this.sigma * A, I = (m * (W * W + H * H)) / 12;
     let ax = fx / m, ay = fy / m + g, al = tq / I;
