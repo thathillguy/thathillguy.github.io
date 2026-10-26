@@ -15,6 +15,11 @@ body {
   margin: 0;
 }
 
+/* Two screens, and the scroll settles on one or the other: the galaxies, or the pool. */
+html {
+  scroll-snap-type: y mandatory;
+}
+
 body.pressing {
   user-select: none;
   -webkit-user-select: none;
@@ -84,6 +89,7 @@ body {
   position: relative;
   height: 100vh;
   height: 100dvh;
+  scroll-snap-align: start;
 }
 
 .nbody {
@@ -101,11 +107,12 @@ body {
    fluid fills the lower 40% (NBodyCanvas moves `.boat`; `.boat-slot` keeps its place). */
 .about {
   position: relative;
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
   display: flex;
   justify-content: center;
-  padding: calc(56px + 6vh) 24px 40vh;
+  padding: calc(56px + 6vh) 24px 0;
+  scroll-snap-align: start;
 }
 
 .boat-slot {
@@ -118,7 +125,7 @@ body {
    deck keeps more room on that side. */
 .boat {
   position: relative;
-  padding: 24px 16% 40px 7%;
+  padding: 24px 10% 48px 7%;
   font-size: clamp(16px, 1.3vw, 19px);
   line-height: 1.45;
   color: var(--ink);
@@ -128,6 +135,16 @@ body {
 
 .boat .deck {
   max-width: 36em;
+}
+
+@media (max-width: 600px) {
+  .boat {
+    padding: 18px 7% 26px;
+    font-size: 15px;
+  }
+  .about {
+    padding-top: calc(56px + 3vh);
+  }
 }
 
 .boat .hull {

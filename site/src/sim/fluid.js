@@ -8,10 +8,17 @@ export const HULL_MARGIN = 0.6; // stars keep this far from the boat's edges
 
 /**
  * The ship's profile as fractions of its box (x right, y down), clockwise from the top-left:
- * a flat deck, a bow that rakes forward to a point then falls back to the keel, a flat keel,
- * and a nearly upright stern. Convex. The outline, both fluid solvers and the buoyancy use it.
+ * a flat deck, a bow that rakes forward and rounds down into a flat keel, and a stern with a
+ * little rake of its own. Convex. The outline, both fluid solvers and the buoyancy use it.
  */
-export const HULL_SHAPE = [[0, 0], [0.92, 0], [1, 0.4], [0.86, 1], [0.06, 1]];
+export const HULL_SHAPES = {
+  ship: [[0, 0], [1, 0], [0.985, 0.35], [0.93, 0.68], [0.84, 0.9], [0.72, 1], [0.08, 1], [0, 0.8]],
+  raft: [[0, 0], [1, 0], [0.97, 1], [0.03, 1]], // a portrait screen gets a tall card: a raft with raked ends, not a squashed ship
+};
+export let HULL_SHAPE = HULL_SHAPES.ship;
+
+/** Choose the hull profile ('ship' or 'raft') before any engine or outline is built. */
+export function setHullProfile(name) { HULL_SHAPE = HULL_SHAPES[name] ?? HULL_SHAPES.ship; }
 
 /** The hull's edges in local units for a box of half-size (hw, hh): start point, unit outward normal, length. */
 export function hullEdges(hw, hh) {
@@ -49,6 +56,8 @@ export function hullPush(lx, ly, hw, hh, margin = 0) {
   }
   return best;
 }
+
+export const AIR_PRESSURE = 0.01; // as a fraction of K: the top few units of the pool, and everything above it, count as air
 
 export const FLUID = {
   cell: 1.2,        // grid spacing (sim units)
@@ -156,20 +165,29 @@ export class Fluid {
    * One substep of length dtf for the first n stars of `sim`, with the fluid forces scaled by
    * `strength` (0..1). `sim.ax/ay` carry any other acceleration (residual gravity, the hole).
    */
-  substep(sim, n, dtf, strength) {
+  /**
+   * One substep. Each star takes part by its release weight sim.relw[i] (0: still a galaxy star,
+   * carried only by its galaxy acceleration; 1: water): it deposits that much, feels that much
+   * gravity, and pressure and viscosity by its square, so a star falls first and becomes fluid
+   * as it lands. In air a released star is slowed toward a rain's terminal speed.
+   */
+  substep(sim, n, dtf) {
     const { cols, rows, h, ox, oy, rho0, count, mx, my, pres } = this;
     const hull = sim.boat;
     const { K, cohesion, visc, g, bounce } = this.o;
-    const { x, y, vx, vy, ax, ay } = sim;
+    const { x, y, vx, vy, ax, ay, relw } = sim;
+    const airDrag = sim.o.airDrag, airP = AIR_PRESSURE * K; // pressure below which a star is in air (see fluid kernel in gpu.js)
     const inv = 1 / h;
     count.fill(0); mx.fill(0); my.fill(0);
     // deposit
     for (let i = 0; i < n; i++) {
+      const rw = relw[i];
+      if (rw <= 0) continue;
       const fx = (x[i] - ox) * inv - 0.5, fy = (y[i] - oy) * inv - 0.5;
       const cx = Math.min(Math.max(Math.floor(fx), 0), cols - 2), cy = Math.min(Math.max(Math.floor(fy), 0), rows - 2);
       const tx = Math.min(Math.max(fx - cx, 0), 1), ty = Math.min(Math.max(fy - cy, 0), 1);
       const c = cy * cols + cx;
-      const w00 = (1 - tx) * (1 - ty), w10 = tx * (1 - ty), w01 = (1 - tx) * ty, w11 = tx * ty;
+      const w00 = (1 - tx) * (1 - ty) * rw, w10 = tx * (1 - ty) * rw, w01 = (1 - tx) * ty * rw, w11 = tx * ty * rw;
       count[c] += w00; count[c + 1] += w10; count[c + cols] += w01; count[c + cols + 1] += w11;
       const u = vx[i], v = vy[i];
       mx[c] += w00 * u; mx[c + 1] += w10 * u; mx[c + cols] += w01 * u; mx[c + cols + 1] += w11 * u;
@@ -179,28 +197,34 @@ export class Fluid {
     this._smooth();
     const { smooth } = this;
     for (let c = 0; c < cols * rows; c++) pres[c] = K * Math.max(smooth[c] / rho0 - 1, -cohesion);
-    // gather and move: gravity comes in with `strength`, pressure and viscosity with its square,
-    // so the stars fall first and become a fluid as they land
-    const ps = strength * strength;
-    const gs = ps * 0.5 * inv, gg = g * strength, vs = visc * ps;
+    // gather and move
     const left = -this.halfW + 0.3, right = this.halfW - 0.3, floor = this.halfH - 0.3;
     for (let i = 0; i < n; i++) {
+      const rw = relw[i];
+      if (rw <= 0) { // still a galaxy star: its galaxy acceleration only
+        vx[i] += ax[i] * dtf; vy[i] += ay[i] * dtf; x[i] += vx[i] * dtf; y[i] += vy[i] * dtf;
+        continue;
+      }
+      const ps = rw * rw, gs = ps * 0.5 * inv, gg = g * rw, vs = visc * ps;
       const fx = (x[i] - ox) * inv - 0.5, fy = (y[i] - oy) * inv - 0.5;
       const cx = Math.min(Math.max(Math.floor(fx), 1), cols - 3), cy = Math.min(Math.max(Math.floor(fy), 1), rows - 3);
       const tx = Math.min(Math.max(fx - cx, 0), 1), ty = Math.min(Math.max(fy - cy, 0), 1);
       const c = cy * cols + cx;
       const w00 = (1 - tx) * (1 - ty), w10 = tx * (1 - ty), w01 = (1 - tx) * ty, w11 = tx * ty;
-      let gx = 0, gy = 0, cnt = 0, su = 0, sv = 0;
+      let gx = 0, gy = 0, cnt = 0, su = 0, sv = 0, pl = 0;
       // the four cells around the star, each with its central-difference gradient
       for (let k = 0; k < 4; k++) {
         const cc = k === 0 ? c : k === 1 ? c + 1 : k === 2 ? c + cols : c + cols + 1;
         const w = k === 0 ? w00 : k === 1 ? w10 : k === 2 ? w01 : w11;
         gx += w * (pres[cc + 1] - pres[cc - 1]);
         gy += w * (pres[cc + cols] - pres[cc - cols]);
-        cnt += w * count[cc]; su += w * mx[cc]; sv += w * my[cc];
+        cnt += w * count[cc]; su += w * mx[cc]; sv += w * my[cc]; pl += w * pres[cc];
       }
       let u = vx[i], v = vy[i];
       if (cnt > 1e-6) { u += vs * (su / cnt - u); v += vs * (sv / cnt - v); }
+      // air is wherever the water is not pressing: unpressurised, so a star in it falls like rain
+      const air = Math.max(0, 1 - pl / airP), slow = Math.min(1, airDrag * rw * air * dtf);
+      u -= u * slow; v -= v * slow;
       u += (ax[i] - gx * gs) * dtf;
       v += (ay[i] - gy * gs + gg) * dtf;
       let px = x[i] + u * dtf, py = y[i] + v * dtf;

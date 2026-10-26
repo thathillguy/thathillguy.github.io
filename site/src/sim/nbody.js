@@ -24,6 +24,8 @@ export const DEFAULTS = {
   splashSpeed: 110,      // ...outward, by up to this much (sim units / s) at the centre
   stirRadius: 9,         // a finger dragged through the water carries the stars within this radius...
   stirBlend: 0.35,       // ...toward its velocity, by this fraction per step at the centre
+  releaseRate: 0.3,      // a fall lets the stars go a few at a time: the released fraction grows by this per sim second
+  airDrag: 2.5,          // a released star falling through air loses this fraction of its speed per second (rain, not shot)
   coreSoftening: 5,      // Plummer softening of the cores
   softening: 1,          // Plummer softening between stars
   separation: 110,       // starting distance between the two cores (their apoapsis)
@@ -48,7 +50,28 @@ const MAX_DEPTH = 24;
 /** Schwarzschild radius of a mass m: 2 G m / c^2, with G = 1. */
 import { Fluid } from './fluid.js';
 
-const REWIND_SECONDS = 0.6; // sim seconds to carry the stars back after a fall
+const REWIND_SECONDS = 0.8;  // sim seconds to carry the stars back after a fall
+const REWIND_STAGGER = 0.6;  // each star's return starts later by up to this fraction of the whole, so they stream rather than lift
+const RELEASE_WIDTH = 0.12;  // a star's release ramps over this much of the released fraction
+
+/** A fixed pseudo-random number in [0, 1) for a star's slot (the same PCG hash as in gpu.js). */
+export function hash01(i) {
+  let x = (Math.imul(i, 747796405) + 2891336453) >>> 0;
+  x = Math.imul((x >>> ((x >>> 28) + 4)) ^ x, 277803737) >>> 0;
+  return (((x >>> 22) ^ x) >>> 0) / 4294967296;
+}
+
+/** How far star i has been let go, 0..1, given the released fraction. */
+export function releaseWeight(i, release) {
+  const t = Math.min(1, Math.max(0, (release * (1 + RELEASE_WIDTH) - hash01(i)) / RELEASE_WIDTH));
+  return t * t * (3 - 2 * t);
+}
+
+/** The stagger of star i's return, 0..1: the position along the straight path back, and its rate (per unit of the whole). */
+export function rewindCurve(i, t) {
+  const tau = Math.min(1, Math.max(0, t * (1 + REWIND_STAGGER) - REWIND_STAGGER * hash01(i)));
+  return [tau * tau * (3 - 2 * tau), tau < 1 ? 6 * tau * (1 - tau) * (1 + REWIND_STAGGER) : 0];
+}
 
 export function schwarzschildRadius(m, c) {
   return (2 * m) / (c * c);
@@ -134,6 +157,8 @@ export class NBody {
     this.boat = null;     // the about card's hull while the page is fallen: { x, y, c, s, hw, hh, vx, vy }
     this.pending = null;  // a splash waiting for the next fluid step: { x, y, r, a }
     this.stir = null;     // the pointer held in the water: { x, y, vx, vy } (sim units, sim seconds)
+    this.release = 0;     // the fraction of stars let go so far in this fall (chases `fall` at releaseRate)
+    this.relw = new Float32Array(this.cap); // each star's release weight for the current fluid step
     this.fallen = false;
     this.snap = null;     // the state the moment a fall began: x, y, vx, vy, and the nebula cores
     this.rewind = null;   // { step, total } while the stars are being carried back to the snapshot
@@ -190,7 +215,7 @@ export class NBody {
     this.fall = f;
     if (f > 0.3) this.fallen = true;
     if (f < 0.15 && this.fallen) { this.fallen = false; this._startRewind(); }
-    else if (f === 0 && !this.rewind) { this.snap = null; this.sortPaused = false; } // a nudge, not a fall
+    else if (f === 0 && !this.rewind) { this.snap = null; this.sortPaused = false; this.release = 0; } // a nudge, not a fall
   }
 
   _takeSnapshot() {
@@ -210,14 +235,15 @@ export class NBody {
     this.rewindRequested = true;
   }
 
-  /** Rewind progress for this step, 0..1 (eased); 1 means restore exactly. */
+  /** Rewind progress for this step, 0..1 (linear; each star eases along it, see rewindCurve); 1 means restore exactly. */
   _rewindProgress() {
     const r = this.rewind;
     r.step++;
-    if (r.step >= r.total) return 1;
-    const t = r.step / r.total;
-    return t * t * (3 - 2 * t);
+    return r.step >= r.total ? 1 : r.step / r.total;
   }
+
+  /** Seconds of sim time the whole rewind takes. */
+  get rewindSeconds() { return REWIND_SECONDS; }
 
   /** The last rewind step: everything back as it was, cores included, and gravity resumes. */
   finishRewind(recompute = true) {
@@ -228,6 +254,7 @@ export class NBody {
     this.rewind = null;
     this.snap = null;
     this.sortPaused = false;
+    this.release = 0;
     if (recompute) this._accelerate();
   }
 
@@ -406,7 +433,7 @@ export class NBody {
     if (this.n < 2) return;
     this._buildTree();
     const { n, x, y, ax, ay, nx, ny, nh, nm, ncx, ncy, nleaf, nchild } = this;
-    const eps2 = this.o.softening ** 2, theta2 = this.o.theta ** 2, mu = 1 - this.fall;
+    const eps2 = this.o.softening ** 2, theta2 = this.o.theta ** 2, rw = this.fall > 0 ? this.relw : null;
     const stack = this._stack;
     for (let i = 0; i < n; i++) {
       const xi = x[i], yi = y[i];
@@ -439,6 +466,7 @@ export class NBody {
           }
         }
       }
+      const mu = rw ? 1 - rw[i] : 1; // a released star no longer feels the galaxies
       ax[i] += axi * mu;
       ay[i] += ayi * mu;
     }
@@ -457,10 +485,10 @@ export class NBody {
         cax[b] -= inv * cm[a] * dx; cay[b] -= inv * cm[a] * dy;
       }
     }
-    const mu = 1 - this.fall;
+    const rw = this.fall > 0 ? this.relw : null;
     for (let i = 0; i < n; i++) {
       let axi = 0, ayi = 0;
-      const xi = x[i], yi = y[i], mi = m[i];
+      const xi = x[i], yi = y[i], mi = m[i], mu = rw ? 1 - rw[i] : 1;
       for (let c = 0; c < k; c++) {
         const w = c === this.hole ? 1 : mu; // the pointer's hole keeps its pull through a fall
         const dx = cx[c] - xi, dy = cy[c] - yi;
@@ -506,12 +534,13 @@ export class NBody {
     const { x, y, vx, vy, ax, ay } = this;
     if (this.rewind) {
       // carried back toward the snapshot, no physics; the last step restores it exactly
-      const s = this._rewindProgress();
-      if (s >= 1) { this.finishRewind(); return; }
-      const { x0, y0 } = this.rewind, { snap } = this;
+      const t = this._rewindProgress();
+      if (t >= 1) { this.finishRewind(); return; }
+      const { x0, y0 } = this.rewind, { snap } = this, rate = 1 / REWIND_SECONDS;
       for (let i = 0; i < this.n; i++) {
-        x[i] = x0[i] + (snap.x[i] - x0[i]) * s; y[i] = y0[i] + (snap.y[i] - y0[i]) * s;
-        vx[i] = 0; vy[i] = 0;
+        const [s, ds] = rewindCurve(i, t), dx = snap.x[i] - x0[i], dy = snap.y[i] - y0[i];
+        x[i] = x0[i] + dx * s; y[i] = y0[i] + dy * s;
+        vx[i] = dx * ds * rate; vy[i] = dy * ds * rate; // so frames between steps move the right way
       }
       this.time += dt;
       return;
@@ -535,15 +564,18 @@ export class NBody {
    * acceleration, then the fluid's substeps. With gravity fully faded the tree is skipped.
    */
   _fluidStep() {
-    const { dt } = this.o, n = this.n, fall = this.fall, mu = 1 - fall;
-    const { ax, ay } = this;
-    if (mu > 1e-3) this._accelerate();
+    const { dt } = this.o, n = this.n, fall = this.fall;
+    // the stars are let go a few at a time, so the pool fills like rain rather than in one drop
+    this.release = Math.max(this.release, Math.min(fall, this.release + this.o.releaseRate * dt));
+    const { relw } = this;
+    for (let i = 0; i < n; i++) relw[i] = releaseWeight(i, this.release);
+    if (this.release < 1) this._accelerate(); // the galaxies go on for the stars still in them
     else this._holePull();
     this.fluid.fit(this.halfW, this.halfH, n, this.o.poolFraction);
     if (this.pending) { this.fluid.impulse(this, n, this.pending); this.pending = null; }
     if (this.stir) this.fluid.stir(this, n, this.stir, this.o.stirRadius, this.o.stirBlend);
     const sub = this.fluid.o.substeps;
-    for (let s = 0; s < sub; s++) this.fluid.substep(this, n, dt / sub, fall);
+    for (let s = 0; s < sub; s++) this.fluid.substep(this, n, dt / sub);
     this.cull();
     this.time += dt;
     this.stats.steps++;

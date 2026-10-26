@@ -4,13 +4,28 @@
 //
 // Body layout, shared with the renderer: vec4 (x, y, mass, radius) per star.
 
-import { HULL_MARGIN } from './fluid.js';
+import { HULL_MARGIN, HULL_SHAPE, AIR_PRESSURE } from './fluid.js';
 
 const WG = 256;
 const MAX_CORES = 4;
 
+const REWIND_STAGGER = '0.6';  // as in nbody.js
+const RELEASE_WIDTH = '0.12';  // as in nbody.js
+// the same PCG hash and release ramp as hash01 / releaseWeight in nbody.js
+const HASH_WGSL = /* wgsl */ `
+fn hash01(i: u32) -> f32 {
+  var x = i * 747796405u + 2891336453u;
+  x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
+  x = (x >> 22u) ^ x;
+  return f32(x) / 4294967296.0;
+}
+fn releaseWeight(i: u32, release: f32) -> f32 {
+  let t = clamp((release * (1.0 + ${RELEASE_WIDTH}) - hash01(i)) / ${RELEASE_WIDTH}, 0.0, 1.0);
+  return t * t * (3.0 - 2.0 * t);
+}`;
+
 const SHADER = /* wgsl */ `
-struct Params { n: u32, k: u32, dt: f32, eps2: f32, mutual: f32, rewind: f32 }
+struct Params { n: u32, k: u32, dt: f32, eps2: f32, hole: f32, rewind: f32, release: f32, rwRate: f32 }
 struct Core { pos: vec2<f32>, m: f32, e2: f32 }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var<storage, read_write> body: array<vec4<f32>>;  // x, y, m, r
@@ -24,6 +39,8 @@ struct Core { pos: vec2<f32>, m: f32, e2: f32 }
 
 var<workgroup> tile: array<vec4<f32>, ${WG}>;
 var<workgroup> red: array<vec2<f32>, ${WG}>;
+
+${HASH_WGSL}
 
 // first half-kick with last step's acceleration, then drift
 @compute @workgroup_size(${WG})
@@ -67,7 +84,8 @@ fn force(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocatio
     }
     workgroupBarrier();
   }
-  a = a * p.mutual;
+  let mu = 1.0 - releaseWeight(i, p.release); // a released star no longer feels the galaxies
+  a = a * mu;
   // cores: exact pull on this star, and this star's pull on each core (reduced per workgroup)
   for (var c = 0u; c < p.k; c++) {
     var contrib = vec2<f32>(0.0);
@@ -75,7 +93,7 @@ fn force(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocatio
       let d = cores[c].pos - me.xy;
       let q = dot(d, d) + cores[c].e2;
       let s = inverseSqrt(q);
-      let f = s * s * s;
+      let f = s * s * s * select(mu, 1.0, f32(c) == p.hole); // the pointer's hole keeps its pull through a fall
       a += d * (cores[c].m * f);
       contrib = -d * (me.z * f);
     }
@@ -104,14 +122,20 @@ fn rewind(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= p.n) { return; }
   if (p.rewind >= 1.0) { body[i] = snapBody[i]; vel[i] = snapVel[i]; return; }
-  body[i] = vec4<f32>(mix(startBody[i].xy, snapBody[i].xy, p.rewind), body[i].zw);
-  vel[i] = vec2<f32>(0.0);
+  // each star eases along its straight path back, starting later by its stagger (rewindCurve in nbody.js)
+  let tau = clamp(p.rewind * (1.0 + ${REWIND_STAGGER}) - ${REWIND_STAGGER} * hash01(i), 0.0, 1.0);
+  let s = tau * tau * (3.0 - 2.0 * tau);
+  let ds = select(0.0, 6.0 * tau * (1.0 - tau) * (1.0 + ${REWIND_STAGGER}), tau < 1.0);
+  let d = snapBody[i].xy - startBody[i].xy;
+  body[i] = vec4<f32>(startBody[i].xy + d * s, body[i].zw);
+  vel[i] = d * (ds * p.rwRate); // so frames between steps move the right way
 }`;
 
 // The fluid of fluid.js, on the GPU: deposit onto a grid with atomics, fold the margins, blur,
 // pressure, then move each star. Its own module and bind groups, since a pipeline may only see
 // eight storage buffers and the gravity kernels already use most of them.
-const FLUID_SHADER = /* wgsl */ `
+// built when the engine is, since the hull profile is chosen at startup (setHullProfile)
+const fluidShader = () => /* wgsl */ `
 struct FParams {
   n: u32, cols: u32, rows: u32, cells: u32,
   h: f32, ox: f32, oy: f32, rho0: f32,
@@ -123,10 +147,12 @@ struct FParams {
   bvx: f32, bvy: f32, hasBoat: f32, margin: f32,
   ix: f32, iy: f32, ir: f32, ia: f32,
   sx: f32, sy: f32, svx: f32, svy: f32,
-  sr: f32, sb: f32, hasStir: f32, pad: f32,
+  sr: f32, sb: f32, hasStir: f32, release: f32,
+  airDrag: f32, pad1: f32, pad2: f32, pad3: f32,
 }
 // the ship's profile, as fractions of its box (HULL_SHAPE in fluid.js)
-const SHAPE = array<vec2<f32>, 5>(vec2<f32>(0.0, 0.0), vec2<f32>(0.92, 0.0), vec2<f32>(1.0, 0.4), vec2<f32>(0.86, 1.0), vec2<f32>(0.06, 1.0));
+const SHAPE = array<vec2<f32>, ${HULL_SHAPE.length}>(${HULL_SHAPE.map(([u, v]) => `vec2<f32>(${u.toFixed(3)}, ${v.toFixed(3)})`).join(', ')});
+${HASH_WGSL}
 @group(0) @binding(0) var<uniform> q: FParams;
 @group(0) @binding(1) var<storage, read_write> body: array<vec4<f32>>;
 @group(0) @binding(2) var<storage, read_write> vel: array<vec2<f32>>;
@@ -154,6 +180,8 @@ fn gridClear(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn splat(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= q.n) { return; }
+  let rw = releaseWeight(i, q.release); // a star still in its galaxy is not water yet
+  if (rw <= 0.0) { return; }
   let pos = body[i].xy;
   let f = (pos - vec2<f32>(q.ox, q.oy)) / q.h - 0.5;
   let cx = u32(clamp(floor(f.x), 0.0, f32(q.cols - 2u)));
@@ -164,7 +192,7 @@ fn splat(@builtin(global_invocation_id) gid: vec3<u32>) {
   let w = vec4<f32>((1.0 - t.x) * (1.0 - t.y), t.x * (1.0 - t.y), (1.0 - t.x) * t.y, t.x * t.y);
   let cs = vec4<u32>(c, c + 1u, c + q.cols, c + q.cols + 1u);
   for (var k = 0u; k < 4u; k++) {
-    let cc = cs[k]; let wk = w[k] * FP;
+    let cc = cs[k]; let wk = w[k] * FP * rw;
     atomicAdd(&grid[3u * cc], i32(round(wk)));
     atomicAdd(&grid[3u * cc + 1u], i32(round(wk * v.x)));
     atomicAdd(&grid[3u * cc + 2u], i32(round(wk * v.y)));
@@ -237,6 +265,12 @@ fn fluid(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= q.n) { return; }
   let pos = body[i].xy;
+  let rw = releaseWeight(i, q.release);
+  if (rw <= 0.0) { // still a galaxy star: its galaxy acceleration only (see Fluid.substep)
+    let v0 = vel[i] + acc[i] * q.dtf;
+    vel[i] = v0; body[i] = vec4<f32>(pos + v0 * q.dtf, body[i].zw);
+    return;
+  }
   let f = (pos - vec2<f32>(q.ox, q.oy)) / q.h - 0.5;
   let cx = u32(clamp(floor(f.x), 1.0, f32(q.cols - 3u)));
   let cy = u32(clamp(floor(f.y), 1.0, f32(q.rows - 3u)));
@@ -244,17 +278,20 @@ fn fluid(@builtin(global_invocation_id) gid: vec3<u32>) {
   let c = cy * q.cols + cx;
   let w = vec4<f32>((1.0 - t.x) * (1.0 - t.y), t.x * (1.0 - t.y), (1.0 - t.x) * t.y, t.x * t.y);
   let cs = vec4<u32>(c, c + 1u, c + q.cols, c + q.cols + 1u);
-  var gr = vec2<f32>(0.0); var cnt = 0.0; var su = vec2<f32>(0.0);
+  var gr = vec2<f32>(0.0); var cnt = 0.0; var su = vec2<f32>(0.0); var pl = 0.0;
   for (var k = 0u; k < 4u; k++) {
     let cc = cs[k]; let wk = w[k];
     gr += wk * vec2<f32>(pres[cc + 1u] - pres[cc - 1u], pres[cc + q.cols] - pres[cc - q.cols]);
+    pl += wk * pres[cc];
     cnt += wk * f32(atomicLoad(&grid[3u * cc]));
     su += wk * vec2<f32>(f32(atomicLoad(&grid[3u * cc + 1u])), f32(atomicLoad(&grid[3u * cc + 2u])));
   }
   var v = vel[i];
-  let ps = q.strength * q.strength; // pressure and viscosity arrive after gravity (see fluid.js)
+  let ps = rw * rw; // pressure and viscosity arrive after gravity (see fluid.js)
   if (cnt > 1e-3) { v += q.visc * ps * (su / cnt - v); }
-  var a = vec2<f32>(0.0, q.g * q.strength) - gr * (ps * 0.5 / q.h);
+  let air = max(0.0, 1.0 - pl / (${AIR_PRESSURE} * q.K)); // unpressurised means air: a released star there falls like rain
+  v -= v * min(1.0, q.airDrag * rw * air * q.dtf);
+  var a = vec2<f32>(0.0, q.g * rw) - gr * (ps * 0.5 / q.h);
   if (q.useAcc > 0.5) { a += acc[i]; }
   else if (q.hm > 0.0) {
     let d = vec2<f32>(q.hx, q.hy) - pos; let qq = dot(d, d) + q.he2; let s = inverseSqrt(qq);
@@ -273,9 +310,9 @@ fn fluid(@builtin(global_invocation_id) gid: vec3<u32>) {
     let l = vec2<f32>(q.bc * d.x + q.bs * d.y, -q.bs * d.x + q.bc * d.y);
     let box = vec2<f32>(q.bhw, q.bhh);
     var inside = true; var dist = 1e9; var nl = vec2<f32>(0.0, -1.0);
-    for (var k = 0u; k < 5u; k++) {
+    for (var k = 0u; k < ${HULL_SHAPE.length}u; k++) {
       let p0 = (2.0 * SHAPE[k] - 1.0) * box;
-      let p1 = (2.0 * SHAPE[(k + 1u) % 5u] - 1.0) * box;
+      let p1 = (2.0 * SHAPE[(k + 1u) % ${HULL_SHAPE.length}u] - 1.0) * box;
       let e = p1 - p0;
       let nrm = normalize(vec2<f32>(e.y, -e.x));
       let sd = dot(l - p0, nrm) - q.margin;
@@ -319,7 +356,7 @@ export function createGpuEngine(device, sim) {
   for (const name of ['kickDrift', 'force', 'kick', 'rewind']) {
     pipelines[name] = device.createComputePipeline({ layout, compute: { module, entryPoint: name } });
   }
-  const fmodule = device.createShaderModule({ code: FLUID_SHADER });
+  const fmodule = device.createShaderModule({ code: fluidShader() });
   const fbgl0 = device.createBindGroupLayout({ entries: [{ binding: 0, ...st('uniform') }, { binding: 1, ...st('storage') }, { binding: 2, ...st('storage') }, { binding: 3, ...st('storage') }] });
   const fbgl1 = device.createBindGroupLayout({ entries: [0, 1, 2, 3].map((b) => ({ binding: b, ...st('storage') })) });
   const flayout = device.createPipelineLayout({ bindGroupLayouts: [fbgl0, fbgl1] });
@@ -342,7 +379,7 @@ export function createGpuEngine(device, sim) {
   const densBuf = device.createBuffer({ size: maxCells * 4, usage });
   const tmpBuf = device.createBuffer({ size: maxCells * 4, usage });
   const presBuf = device.createBuffer({ size: maxCells * 4, usage });
-  const fparams = device.createBuffer({ size: 176, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const fparams = device.createBuffer({ size: 192, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const readPres = [0, 1].map(() => device.createBuffer({ size: maxCells * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }));
   const pressure = new Float32Array(maxCells); // the fluid's pressure grid, for the boat
   let presCells = 0;                            // cells copied in the readback in flight
@@ -394,27 +431,28 @@ export function createGpuEngine(device, sim) {
 
   const writeParams = () => {
     new Uint32Array(paramData, 0, 2).set([n, sim.k]);
-    new Float32Array(paramData, 8, 4).set([sim.o.dt, sim.o.softening ** 2, 1 - sim.fall, rewindS]);
+    new Float32Array(paramData, 8, 6).set([sim.o.dt, sim.o.softening ** 2, sim.hole ?? -1, rewindS, sim.fall > 0 ? sim.release : 0, 1 / sim.rewindSeconds]);
     device.queue.writeBuffer(params, 0, paramData);
   };
-  const fdata = new ArrayBuffer(176);
+  const fdata = new ArrayBuffer(192);
   const writeFluidParams = (useAcc) => {
     const f = sim.fluid, o = f.o, hole = sim.hole, b = sim.boat;
     new Uint32Array(fdata, 0, 4).set([n, f.cols, f.rows, f.cols * f.rows]);
     const im = sim.pending, st = sim.stir;
-    new Float32Array(fdata, 16, 40).set([
+    new Float32Array(fdata, 16, 44).set([
       f.h, f.ox, f.oy, f.rho0, o.K, o.cohesion, o.visc, o.g, sim.fall, sim.o.dt / o.substeps, sim.halfW, sim.halfH, o.bounce,
       hole == null ? 0 : sim.cx[hole], hole == null ? 0 : sim.cy[hole], hole == null ? 0 : sim.cm[hole], hole == null ? 1 : sim.ce2[hole], useAcc ? 1 : 0,
       b ? b.x : 0, b ? b.y : 0, b ? b.c : 1, b ? b.s : 0, b ? b.hw : 0, b ? b.hh : 0, b ? b.vx : 0, b ? b.vy : 0, b ? 1 : 0, HULL_MARGIN,
       im ? im.x : 0, im ? im.y : 0, im ? im.r : 0, im ? im.a : 0,
-      st ? st.x : 0, st ? st.y : 0, st ? st.vx : 0, st ? st.vy : 0, sim.o.stirRadius, sim.o.stirBlend, st ? 1 : 0, 0,
+      st ? st.x : 0, st ? st.y : 0, st ? st.vx : 0, st ? st.vy : 0, sim.o.stirRadius, sim.o.stirBlend, st ? 1 : 0, sim.release,
+      sim.o.airDrag, 0, 0, 0,
     ]);
     device.queue.writeBuffer(fparams, 0, fdata);
   };
   const writeCores = () => {
     coreData.fill(0);
-    // a core's pull on the stars fades with a fall, except the pointer's hole
-    for (let c = 0; c < sim.k; c++) { coreData[4 * c] = sim.cx[c]; coreData[4 * c + 1] = sim.cy[c]; coreData[4 * c + 2] = sim.cm[c] * (c === sim.hole ? 1 : 1 - sim.fall); coreData[4 * c + 3] = sim.ce2[c]; }
+    // (a core's pull on a star fades as that star is released, in the force kernel; the pointer's hole keeps its pull)
+    for (let c = 0; c < sim.k; c++) { coreData[4 * c] = sim.cx[c]; coreData[4 * c + 1] = sim.cy[c]; coreData[4 * c + 2] = sim.cm[c]; coreData[4 * c + 3] = sim.ce2[c]; }
     device.queue.writeBuffer(coresBuf, 0, coreData);
   };
 
@@ -482,16 +520,18 @@ export function createGpuEngine(device, sim) {
           if (rewindS >= 1) { sim.finishRewind(false); writeCores(); dispatch(enc, 'force'); }
           sim.time += sim.o.dt;
         } else if (sim.fall > 0) {
-          // fallen: residual gravity (and the hole) from the force kernel while any remains, then
-          // the fluid's substeps; the unseen cores hold still
-          const mu = 1 - sim.fall;
+          // fallen: the stars are let go a few at a time (sim.release); the galaxies' gravity from
+          // the force kernel while any star is still in them, then the fluid's substeps; the
+          // unseen cores hold still
+          sim.release = Math.max(sim.release, Math.min(sim.fall, sim.release + sim.o.releaseRate * sim.o.dt));
+          const galaxies = sim.release < 1;
           sim.fluid.fit(sim.halfW, sim.halfH, n, sim.o.poolFraction);
           const cells = sim.fluid.cols * sim.fluid.rows;
           rewindS = 0;
-          writeParams(); writeCores(); writeFluidParams(mu > 1e-3);
+          writeParams(); writeCores(); writeFluidParams(galaxies);
           if (sim.pending) { dispatchFluid(enc, 'impulse', n); sim.pending = null; }
           if (sim.stir) dispatchFluid(enc, 'stir', n);
-          if (mu > 1e-3) { coreAccel(); dispatch(enc, 'force'); }
+          if (galaxies) { coreAccel(); dispatch(enc, 'force'); }
           for (let t = 0; t < sim.fluid.o.substeps; t++) {
             dispatchFluid(enc, 'gridClear', cells);
             dispatchFluid(enc, 'splat', n);

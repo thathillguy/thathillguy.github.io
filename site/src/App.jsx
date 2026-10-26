@@ -2,8 +2,10 @@ import { useRef } from 'react';
 import HeaderBar from './components/HeaderBar.jsx';
 import NBodyCanvas from './components/NBodyCanvas.jsx';
 import Typewriter from './components/Typewriter.jsx';
-import { HULL_SHAPE } from './sim/fluid.js';
+import { HULL_SHAPE, setHullProfile } from './sim/fluid.js';
 
+// A portrait screen (a phone) gets a tall card, which no ship profile survives: it rides a raft.
+setHullProfile(window.innerWidth < 0.8 * window.innerHeight ? 'raft' : 'ship');
 const HULL_POINTS = HULL_SHAPE.map(([u, v]) => `${u * 100},${v * 100}`).join(' ');
 
 // The star count is measured at startup; `?stars=N` pins it and `?gpu=0` forces the CPU path.
