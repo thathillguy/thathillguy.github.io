@@ -90,8 +90,10 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
     // The about card is a boat once the page has fallen: it drops from where it is laid out,
     // floats, and is eased back into place when the water is gone. The fluid sees its hull.
     const slotPose = () => {
+      // where the page lays the card out (its slot, untransformed) and the card's own size
       const r = boatEl.parentElement.getBoundingClientRect();
-      return { tx: (r.left + r.width / 2 - width / 2) / pxPerUnit, ty: (r.top + r.height / 2 - height / 2) / pxPerUnit, hw: r.width / 2 / pxPerUnit, hh: r.height / 2 / pxPerUnit };
+      const w = boatEl.offsetWidth, h = boatEl.offsetHeight;
+      return { tx: (r.left + w / 2 - width / 2) / pxPerUnit, ty: (r.top + h / 2 - height / 2) / pxPerUnit, hw: w / 2 / pxPerUnit, hh: h / 2 / pxPerUnit };
     };
     const updateBoat = (dtSim) => {
       if (!boatEl || !sim) return;
@@ -99,7 +101,7 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
       boat.hw = hw; boat.hh = hh; boat.ceiling = 64 / pxPerUnit; boat.moorX = tx;
       if (sim.fall >= BOAT_RELEASE && !sim.rewind) {
         if (!boat.active) { boat.pin(tx, ty); boat.active = true; boatReturning = false; }
-        boat.step(dtSim, driver.positions, driver.velocities, sim.n, sim.halfW, sim.halfH, sim.fluid.o.g * sim.fall);
+        boat.step(dtSim, sim.fluid, driver.pressure, driver.positions, driver.velocities, sim.n, sim.halfW, sim.halfH, sim.fluid.o.g * sim.fall);
       } else {
         if (boat.active) { boat.active = false; boatReturning = true; }
         if (boatReturning) {

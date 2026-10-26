@@ -1,34 +1,28 @@
-// The about card as a boat: a rigid rectangle that floats on the fluid. Buoyancy is hydrostatic
-// against the free surface measured just beside the hull (there is no surface under a hull),
-// sampled along the hull's bottom and sides so a tilt rights itself; drag toward the water's
-// motion; gravity. The fluid treats the hull as a solid wall (see fluid.js and gpu.js).
-// Units are the simulation's; y points down.
-
+// The about card as a ship: a rigid hull (HULL_SHAPE in fluid.js) that floats on the fluid.
+// The water's own pressure field is integrated over the hull's faces, so the hull rises when
+// the water under it is compressed and settles when it is not; drag toward the water's motion;
+// gravity. The fluid treats the hull as a solid wall (fluid.js and gpu.js). Units are the
+// simulation's; y points down.
 import { hullEdges, hullArea } from './fluid.js';
-
-const K_SURFACE = 8;   // the k-th highest star in a column marks the surface (the rest is spray)
-const COLUMN = 4;      // width of the surface-measuring columns beside the hull
 
 export class Boat {
   constructor(o = {}) {
-    this.sigma = o.sigma ?? 0.42; // density relative to the fluid: the fraction of the height submerged at rest
-    this.drag = o.drag ?? 2.5;    // 1/s, toward the water's velocity, along
-    this.heave = o.heave ?? 6;    // 1/s, up and down: water resists a hull bobbing far more than sliding
-    this.spin = o.spin ?? 6.0;    // 1/s, angular damping
+    this.sigma = o.sigma ?? 0.42;  // density relative to the fluid: the fraction of the height submerged at rest
+    this.drag = o.drag ?? 2.5;     // 1/s, toward the water's velocity, along
+    this.heave = o.heave ?? 6;     // 1/s, up and down: water resists a hull bobbing far more than sliding
+    this.spin = o.spin ?? 6.0;     // 1/s, angular damping
     this.maxTilt = o.maxTilt ?? 0.3; // rad: it is a page, it should stay readable
-    this.tau = o.tau ?? 0.25;     // s, how quickly the hull believes a change in the surface it sees
-    this.moor = o.moor ?? 0.35;   // 1/s^2, a slack line back toward where the page laid the card out
+    this.moor = o.moor ?? 0.35;    // 1/s^2, a slack line back toward where the page laid the card out
     this.moorX = null;
     this.x = 0; this.y = 0; this.vx = 0; this.vy = 0; this.th = 0; this.om = 0;
     this.hw = 1; this.hh = 1;
-    this.ceiling = 0;             // sim units kept clear at the top of the view (the top bar)
+    this.ceiling = 0;              // sim units kept clear at the top of the view (the top bar)
     this.active = false;
-    this.surface = null;          // [yLeft, yRight]: the smoothed surface beside the hull
-    this._top = [new Float64Array(K_SURFACE), new Float64Array(K_SURFACE)];
+    this.wet = 0;                  // fraction of the hull's faces under pressure, for inspection
   }
 
   /** Hold the hull at (x, y), level and still. */
-  pin(x, y) { this.x = x; this.y = y; this.vx = this.vy = this.th = this.om = 0; this.active = false; this.surface = null; }
+  pin(x, y) { this.x = x; this.y = y; this.vx = this.vy = this.th = this.om = 0; this.active = false; }
 
   /** Ease toward (x, y, level) when the water is gone, by `k` of the way. */
   easeTo(x, y, k) { this.x += (x - this.x) * k; this.y += (y - this.y) * k; this.th += (0 - this.th) * k; this.vx = this.vy = this.om = 0; }
@@ -37,86 +31,69 @@ export class Boat {
   get hull() { return { x: this.x, y: this.y, c: Math.cos(this.th), s: Math.sin(this.th), hw: this.hw, hh: this.hh, vx: this.vx, vy: this.vy }; }
 
   /**
-   * Advance by dt. `positions` holds (x, y, m, r) per star and `velocities` (vx, vy), n stars;
-   * the pool's walls are at ±halfW and its floor at halfH; g is the current downward field.
+   * Advance by dt. `fluid` is the grid (for its layout) and `pressure` its pressure field;
+   * `positions` (x, y, m, r per star) and `velocities` (vx, vy) give the water's motion near
+   * the hull; the pool's walls are at ±halfW and its floor at halfH; g is the downward field.
    */
-  step(dt, positions, velocities, n, halfW, halfH, g) {
+  step(dt, fluid, pressure, positions, velocities, n, halfW, halfH, g) {
     const { x, y, hw, hh } = this;
     const c = Math.cos(this.th), s = Math.sin(this.th);
-    const ext = Math.abs(c) * hw + Math.abs(s) * hh; // the hull's half-width along world x
-    // the surface is read in a column on each side of the hull, kept inside the walls
-    const xl1 = Math.max(x - ext - 0.3, -halfW + COLUMN), xl0 = xl1 - COLUMN;
-    const xr0 = Math.min(x + ext + 0.3, halfW - COLUMN), xr1 = xr0 + COLUMN;
-    const [tl, tr] = this._top;
-    tl.fill(halfH); tr.fill(halfH);
-    let fvx = 0, fvy = 0, fn = 0;
-    const bottom = y + ext + 6; // water this far below the hull counts for drag
-    for (let i = 0, k = 0; i < n; i++, k += 4) {
-      const px = positions[k], py = positions[k + 1];
-      let top = null;
-      if (px >= xl0 && px <= xl1) top = tl;
-      else if (px >= xr0 && px <= xr1) top = tr;
-      else continue;
-      if (py < top[K_SURFACE - 1]) { // insert into the k smallest
-        let j = K_SURFACE - 1;
-        while (j > 0 && top[j - 1] > py) { top[j] = top[j - 1]; j--; }
-        top[j] = py;
-      }
-      if (py < bottom) { fvx += velocities[2 * i]; fvy += velocities[2 * i + 1]; fn++; }
-    }
-    // an empty column (no water there yet) borrows the other side; the reading is low-passed
-    let ml = tl[K_SURFACE - 1], mr = tr[K_SURFACE - 1];
-    if (ml >= halfH && mr < halfH) ml = mr;
-    if (mr >= halfH && ml < halfH) mr = ml;
-    const k = Math.min(1, dt / this.tau);
-    if (!this.surface) this.surface = [ml, mr];
-    else { this.surface[0] += (ml - this.surface[0]) * k; this.surface[1] += (mr - this.surface[1]) * k; }
-    const [yl, yr] = this.surface;
-    const xl = (xl0 + xl1) / 2, xr = (xr0 + xr1) / 2;
-    const surfaceAt = (wx) => yl + ((yr - yl) * (wx - xl)) / (xr - xl);
+    const ext = Math.abs(c) * hw + Math.abs(s) * hh;
+    const W = 2 * hw;
 
-    // pressure on every face of the hull but the deck, hydrostatic below the interpolated surface
-    const W = 2 * hw, H = 2 * hh, A = hullArea(hw, hh);
-    let fx = 0, fy = 0, tq = 0, wet = 0;
-    const sample = (lx, ly, nx, ny, ds) => {
-      const wx = x + c * lx - s * ly, wy = y + s * lx + c * ly;   // world point
-      const depth = wy - surfaceAt(wx);
-      if (depth <= 0) return;
-      const P = g * depth;
-      const wnx = c * nx - s * ny, wny = s * nx + c * ny;         // world normal (outward)
-      const dfx = -P * wnx * ds, dfy = -P * wny * ds;
-      fx += dfx; fy += dfy;
-      tq += (wx - x) * dfy - (wy - y) * dfx;
-      wet += ds;
-    };
+    // pressure on every face but the deck, sampled a little outside each face
+    const A = hullArea(hw, hh), out = 0.8 * fluid.h;
+    let fx = 0, fy = 0, tq = 0, wet = 0, total = 0;
     for (const e of hullEdges(hw, hh)) {
       if (e.ny < -0.9) continue; // the deck
-      const N = Math.max(2, Math.round(e.len / (W / 12)));
+      const N = Math.max(2, Math.round(e.len / (W / 16))), ds = e.len / N;
+      const wnx = c * e.nx - s * e.ny, wny = s * e.nx + c * e.ny;   // world normal (outward)
       for (let i = 0; i < N; i++) {
         const t = (i + 0.5) / N;
-        sample(e.x0 + (e.x1 - e.x0) * t, e.y0 + (e.y1 - e.y0) * t, e.nx, e.ny, e.len / N);
+        const lx = e.x0 + (e.x1 - e.x0) * t, ly = e.y0 + (e.y1 - e.y0) * t;
+        const wx = x + c * lx - s * ly, wy = y + s * lx + c * ly;   // world point on the face
+        const P = Math.max(0, fluid.pressureAt(pressure, wx + wnx * out, wy + wny * out));
+        total += ds;
+        if (P <= 0) continue;
+        const dfx = -P * wnx * ds, dfy = -P * wny * ds;
+        fx += dfx; fy += dfy;
+        tq += (wx - x) * dfy - (wy - y) * dfx;
+        wet += ds;
       }
     }
-    const m = this.sigma * A, I = (m * (W * W + H * H)) / 12;
+    this.wet = total > 0 ? wet / total : 0;
+
+    // the water's motion just below the hull, for drag
+    let fvx = 0, fvy = 0, fn = 0;
+    const lo = x - ext - 1, hi = x + ext + 1;
+    for (let i = 0, k = 0; i < n; i++, k += 4) {
+      const px = positions[k];
+      if (px < lo || px > hi) continue;
+      const dx = px - x, dy = positions[k + 1] - y;
+      const lx = c * dx + s * dy, ly = -s * dx + c * dy;
+      if (Math.abs(lx) < hw + 1 && ly > hh - 1 && ly < hh + 6) { fvx += velocities[2 * i]; fvy += velocities[2 * i + 1]; fn++; }
+    }
+
+    const m = this.sigma * A, H = 2 * hh, I = (m * (W * W + H * H)) / 12;
     let ax = fx / m, ay = fy / m + g, al = tq / I;
-    if (this.moorX != null && wet > 0) ax -= this.moor * (x - this.moorX);
-    if (wet > 0) {
-      const f = Math.min(1, wet / (W + 2 * H));
+    if (this.wet > 0) {
+      const f = Math.min(1, 2 * this.wet);
       const ux = fn > 0 ? fvx / fn : 0, uy = fn > 0 ? fvy / fn : 0;
       ax += f * this.drag * (ux - this.vx); ay += f * this.heave * (uy - this.vy);
       al -= f * this.spin * this.om;
+      if (this.moorX != null) ax -= this.moor * (x - this.moorX);
     } else al -= 0.3 * this.om;
     this.vx += ax * dt; this.vy += ay * dt; this.om += al * dt;
     this.x += this.vx * dt; this.y += this.vy * dt; this.th += this.om * dt;
     const lim = this.maxTilt;
     if (this.th > lim) { this.th = lim; this.om = Math.min(this.om, 0); }
     if (this.th < -lim) { this.th = -lim; this.om = Math.max(this.om, 0); }
-    // walls, floor, and the top of the view as a ceiling (a surge should not carry it off the page)
+    // walls, floor, and the top of the view as a soft ceiling
     const ey = Math.abs(s) * hw + Math.abs(c) * hh;
     if (this.x - ext < -halfW) { this.x = -halfW + ext; this.vx = Math.abs(this.vx) * 0.3; }
     if (this.x + ext > halfW) { this.x = halfW - ext; this.vx = -Math.abs(this.vx) * 0.3; }
     if (this.y + ey > halfH) { this.y = halfH - ey; this.vy = -Math.abs(this.vy) * 0.2; this.om *= 0.5; }
     const over = -halfH + this.ceiling - (this.y - ey);
-    if (over > 0) { this.vy += (40 * over - 4 * Math.min(this.vy, 0)) * dt; } // a soft ceiling: pushed back down, not nailed
+    if (over > 0) { this.vy += (40 * over - 4 * Math.min(this.vy, 0)) * dt; }
   }
 }

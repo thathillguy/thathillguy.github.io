@@ -316,6 +316,9 @@ export function createGpuEngine(device, sim) {
   const tmpBuf = device.createBuffer({ size: maxCells * 4, usage });
   const presBuf = device.createBuffer({ size: maxCells * 4, usage });
   const fparams = device.createBuffer({ size: 144, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const readPres = [0, 1].map(() => device.createBuffer({ size: maxCells * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }));
+  const pressure = new Float32Array(maxCells); // the fluid's pressure grid, for the boat
+  let presCells = 0;                            // cells copied in the readback in flight
   const params = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const coresBuf = device.createBuffer({ size: MAX_CORES * 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const readBody = [0, 1].map(() => device.createBuffer({ size: cap * 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }));
@@ -420,6 +423,7 @@ export function createGpuEngine(device, sim) {
     kind: 'webgpu',
     positions,
     velocities,
+    pressure,
     get count() { return n; },
 
     /** Run `steps` physics steps and refresh `positions`; resolves when the readback is in. */
@@ -479,14 +483,17 @@ export function createGpuEngine(device, sim) {
           enc.copyBufferToBuffer(bodyBuf, 0, readBody[flip], 0, n * 16);
           enc.copyBufferToBuffer(velBuf, 0, readVel[flip], 0, n * 8);
           enc.copyBufferToBuffer(reactBuf, 0, readReact[flip], 0, groups * MAX_CORES * 8);
+          presCells = sim.fall > 0 && !sim.rewind ? sim.fluid.cols * sim.fluid.rows : 0;
+          if (presCells) enc.copyBufferToBuffer(presBuf, 0, readPres[flip], 0, presCells * 4);
         }
         device.queue.submit([enc.finish()]);
         if (!sim.rewind && !(sim.fall > 0)) { coreAccel(); sim.kickCores(h); }
         sim.stats.steps++;
       }
-      const rb = readBody[flip], rv = readVel[flip], rr = readReact[flip];
+      const rb = readBody[flip], rv = readVel[flip], rr = readReact[flip], rp = readPres[flip], cells = presCells;
       flip ^= 1;
-      await Promise.all([rb.mapAsync(GPUMapMode.READ, 0, n * 16), rv.mapAsync(GPUMapMode.READ, 0, n * 8), rr.mapAsync(GPUMapMode.READ)]);
+      await Promise.all([rb.mapAsync(GPUMapMode.READ, 0, n * 16), rv.mapAsync(GPUMapMode.READ, 0, n * 8), rr.mapAsync(GPUMapMode.READ), cells ? rp.mapAsync(GPUMapMode.READ, 0, cells * 4) : null]);
+      if (cells) { pressure.set(new Float32Array(rp.getMappedRange(0, cells * 4))); rp.unmap(); }
       positions.set(new Float32Array(rb.getMappedRange(0, n * 16)));
       rb.unmap();
       velocities.set(new Float32Array(rv.getMappedRange(0, n * 8)));
@@ -515,7 +522,7 @@ export function createGpuEngine(device, sim) {
     },
 
     destroy(keepDevice = false) {
-      for (const b of [bodyBuf, velBuf, accBuf, reactBuf, snapBody, snapVel, startBody, gridBuf, densBuf, tmpBuf, presBuf, params, fparams, coresBuf, ...readBody, ...readVel, ...readReact]) b.destroy();
+      for (const b of [bodyBuf, velBuf, accBuf, reactBuf, snapBody, snapVel, startBody, gridBuf, densBuf, tmpBuf, presBuf, params, fparams, coresBuf, ...readBody, ...readVel, ...readReact, ...readPres]) b.destroy();
       if (!keepDevice) device.destroy();
     },
   };

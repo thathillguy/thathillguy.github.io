@@ -89,6 +89,15 @@ export class Fluid {
     this.rho0 = ((n / (2 * halfW * depth)) * h * h) / (1 + (0.5 * this.o.g * depth) / this.o.K);
   }
 
+  /** The pressure at a world point, bilinear on the cell centres of `pres` (a grid laid out like this one's). */
+  pressureAt(pres, wx, wy) {
+    const { cols, rows, h, ox, oy } = this;
+    const fx = Math.min(Math.max((wx - ox) / h - 0.5, 0), cols - 1.001), fy = Math.min(Math.max((wy - oy) / h - 0.5, 0), rows - 1.001);
+    const cx = Math.floor(fx), cy = Math.floor(fy), tx = fx - cx, ty = fy - cy;
+    const c = cy * cols + cx;
+    return (1 - tx) * (1 - ty) * pres[c] + tx * (1 - ty) * pres[c + 1] + (1 - tx) * ty * pres[c + cols] + tx * ty * pres[c + cols + 1];
+  }
+
   /** A 5-tap binomial blur of the deposited density, both ways: the pressure field needs to be
    *  smoother than a dozen stars per cell can make it. */
   _smooth() {

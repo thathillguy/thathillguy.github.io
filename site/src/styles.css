@@ -105,6 +105,7 @@ body {
 
 .boat-slot {
   width: min(1040px, 100%);
+  align-self: flex-start; /* the slot must be exactly the card's size: the water reads the hull from it */
 }
 
 /* A ship in profile (HULL_SHAPE in fluid.js draws the same outline for the water): the text is

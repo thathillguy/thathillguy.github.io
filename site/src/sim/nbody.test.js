@@ -164,10 +164,13 @@ test('the about card floats: it settles with roughly its density fraction submer
     sim.boat = boat.hull;
     sim.step();
     pack();
-    boat.step(sim.o.dt, positions, velocities, sim.n, sim.halfW, sim.halfH, g);
+    boat.step(sim.o.dt, sim.fluid, sim.fluid.pres, positions, velocities, sim.n, sim.halfW, sim.halfH, g);
   }
-  const [yl, yr] = boat.surface;
-  const surface = (yl + yr) / 2;
+  // the free surface away from the hull: the 5th percentile of y beyond the hull's ends
+  const ys = [];
+  for (let i = 0; i < sim.n; i++) if (Math.abs(sim.x[i] - boat.x) > boat.hw + 3) ys.push(sim.y[i]);
+  ys.sort((a, b) => a - b);
+  const surface = ys[Math.floor(0.05 * ys.length)];
   const submerged = (boat.y + boat.hh - surface) / (2 * boat.hh);
   // the pool is still sloshing from the splash, so this is a floating check, not a still one
   assert.ok(submerged > 0.25 && submerged < 0.85, `submerged fraction ${submerged.toFixed(2)}`);

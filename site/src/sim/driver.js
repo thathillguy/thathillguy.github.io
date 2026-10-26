@@ -81,6 +81,11 @@ export class Driver {
     else if (perFrame * 2 < budgetMs * 0.8 && o.dt > DT_FINE) o.dt = Math.max(DT_FINE, o.dt / 2);
   }
 
+  /** The fluid's pressure grid (see fluid.js for its layout) while the page is fallen. */
+  get pressure() {
+    return this.gpu ? this.gpu.pressure : this.sim.fluid.pres;
+  }
+
   get stepsPerSecond() {
     return Math.round(1 / this.sim.o.dt);
   }
