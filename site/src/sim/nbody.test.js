@@ -241,9 +241,9 @@ test('a finger dragged through the water carries the water near it along', () =>
 test('a fall lets the stars go a few at a time, and they rain rather than fly', () => {
   const sim = new NBody({ bodies: 6000, random: seeded(8), screens: 1, halfW: 36, halfH: 20, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
   sim.setFall(1);
-  const steps = Math.round(0.5 / sim.o.dt);
+  const steps = Math.round(1 / sim.o.dt);
   for (let k = 0; k < steps; k++) sim.step();
-  assert.ok(Math.abs(sim.release - 0.5 * sim.o.releaseRate) < 0.02, `released fraction ${sim.release.toFixed(3)} after 0.5 s`);
+  assert.ok(Math.abs(sim.release - sim.o.releaseRate) < 0.02, `released fraction ${sim.release.toFixed(3)} after 1 s`);
   let released = 0, relDown = 0, relSide = 0, held = 0, heldDown = 0, heldSide = 0;
   for (let i = 0; i < sim.n; i++) {
     if (sim.relw[i] > 0.5) { released++; relDown += sim.vy[i]; relSide += Math.abs(sim.vx[i]); }
@@ -254,8 +254,8 @@ test('a fall lets the stars go a few at a time, and they rain rather than fly', 
   assert.ok(held > 0.6 * sim.n && Math.abs(heldDown / held) < 3, `the ${held} unreleased stars are still orbiting (mean vy ${(heldDown / held).toFixed(2)})`);
   assert.ok(relDown / released > 5, `released stars are falling (mean vy ${(relDown / released).toFixed(1)}; some have landed already)`);
   assert.ok(relSide / released < heldSide / held, `released |vx| ${(relSide / released).toFixed(1)} vs orbiting ${(heldSide / held).toFixed(1)}`);
-  for (let k = 0; k < 6 * steps; k++) sim.step();
-  assert.equal(sim.release, 1, 'everyone released by 3.5 s');
+  for (let k = 0; k < 5 * steps; k++) sim.step();
+  assert.equal(sim.release, 1, 'everyone released by 6 s');
 });
 
 test('a released star falling through air loses its sideways motion: rain, not a shot', () => {

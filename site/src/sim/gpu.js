@@ -4,7 +4,7 @@
 //
 // Body layout, shared with the renderer: vec4 (x, y, mass, radius) per star.
 
-import { HULL_MARGIN, HULL_SHAPE, AIR_PRESSURE } from './fluid.js';
+import { HULL_MARGIN, HULL_SHAPE, AIR_PRESSURE, LAND_FULL, LAND_CHANCE, SHED_SPEED } from './fluid.js';
 
 const WG = 256;
 const MAX_CORES = 4;
@@ -157,7 +157,7 @@ ${HASH_WGSL}
 @group(0) @binding(1) var<storage, read_write> body: array<vec4<f32>>;
 @group(0) @binding(2) var<storage, read_write> vel: array<vec2<f32>>;
 @group(0) @binding(3) var<storage, read_write> acc: array<vec2<f32>>;
-@group(0) @binding(4) var<storage, read_write> landed: array<u32>; // 1 once a released star has reached the water or the floor
+@group(0) @binding(4) var<storage, read_write> landed: array<u32>; // bit 0 set once a released star is water; above it, a rain drop's substep count
 @group(1) @binding(0) var<storage, read_write> grid: array<atomic<i32>>; // per cell: count, mx, my, fixed point x256
 @group(1) @binding(1) var<storage, read_write> dens: array<f32>;
 @group(1) @binding(2) var<storage, read_write> tmp: array<f32>;
@@ -182,7 +182,7 @@ fn splat(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= q.n) { return; }
   let rw = releaseWeight(i, q.release); // a star still in its galaxy is not water yet, and rain is not water until it lands
-  if (rw <= 0.0 || landed[i] == 0u) { return; }
+  if (rw <= 0.0 || (landed[i] & 1u) == 0u) { return; }
   let pos = body[i].xy;
   let f = (pos - vec2<f32>(q.ox, q.oy)) / q.h - 0.5;
   let cx = u32(clamp(floor(f.x), 0.0, f32(q.cols - 2u)));
@@ -288,7 +288,8 @@ fn fluid(@builtin(global_invocation_id) gid: vec3<u32>) {
     su += wk * vec2<f32>(f32(atomicLoad(&grid[3u * cc + 1u])), f32(atomicLoad(&grid[3u * cc + 2u])));
   }
   var v = vel[i];
-  let rain = landed[i] == 0u; // falling, and nothing to the other drops until it lands (see Fluid.substep)
+  let st = landed[i];
+  let rain = (st & 1u) == 0u; // falling, and nothing to the other drops until it lands (see Fluid.substep)
   let ps = select(rw * rw, 0.0, rain); // pressure and viscosity arrive after gravity (see fluid.js)
   if (!rain && cnt > 1e-3) { v += q.visc * ps * (su / cnt - v); }
   let air = select(max(0.0, 1.0 - pl / (${AIR_PRESSURE} * q.K)), 1.0, rain); // unpressurised means air: a star there falls like rain
@@ -305,9 +306,10 @@ fn fluid(@builtin(global_invocation_id) gid: vec3<u32>) {
   if (np.x < left) { np.x = left; if (v.x < 0.0) { v.x = -v.x * q.bounce; } }
   else if (np.x > right) { np.x = right; if (v.x > 0.0) { v.x = -v.x * q.bounce; } }
   if (np.y > floor) { np.y = floor; if (v.y > 0.0) { v.y = -v.y * q.bounce; } }
+  var shed = false;
   if (q.hasBoat > 0.5) {
-    // inside the tapered hull? push out through the nearest face, taking the hull's velocity
-    // (the same test as hullPush in fluid.js)
+    // inside the hull? push out through the nearest face, taking the hull's velocity (the same
+    // test as hullPush in fluid.js); rain goes out the sides and is thrown a little clear of them
     let d = np - vec2<f32>(q.bx, q.by);
     let l = vec2<f32>(q.bc * d.x + q.bs * d.y, -q.bs * d.x + q.bc * d.y);
     let box = vec2<f32>(q.bhw, q.bhh);
@@ -319,7 +321,7 @@ fn fluid(@builtin(global_invocation_id) gid: vec3<u32>) {
       let nrm = normalize(vec2<f32>(e.y, -e.x));
       let sd = dot(l - p0, nrm) - q.margin;
       if (sd >= 0.0) { inside = false; }
-      if (nrm.y < -0.9) { continue; } // the deck is never the way out (see hullPush)
+      if (nrm.y < -0.9 || (rain && nrm.y > 0.7)) { continue; } // the deck is never the way out, nor the keel for rain (see hullPush)
       if (-sd < dist) { dist = -sd; nl = nrm; }
     }
     if (inside) {
@@ -327,11 +329,16 @@ fn fluid(@builtin(global_invocation_id) gid: vec3<u32>) {
       np += wn * dist;
       let rel = dot(v - vec2<f32>(q.bvx, q.bvy), wn);
       if (rel < 0.0) { v -= wn * (rel * (1.0 + q.bounce)); }
+      if (rain) { shed = true; v += wn * (${SHED_SPEED.toFixed(1)} * (0.2 + 0.8 * f32(i * 2654435761u) / 4294967296.0)); } // shedScatter
     }
   }
-  if (rain && (cnt > 0.5 * q.rho0 * FP || np.y > floor - q.h)) { // into the water, or onto the floor
-    landed[i] = 1u;
-    if (cnt > 1e-3) { let m = su / cnt; v = m + 0.3 * (v - m); } // a drop joins the water: most of its fall is spent
+  if (rain) {
+    let c = (st >> 1u) + 1u; // this drop's substeps so far: its landing rolls run through a golden-ratio sequence
+    let roll = fract(f32(i * 2654435761u) / 4294967296.0 + f32(c) * 0.6180339887);
+    if (!shed && cnt < ${LAND_FULL} * q.rho0 * FP && (cnt > 0.5 * q.rho0 * FP || np.y > floor - q.h) && roll < ${LAND_CHANCE}) { // into water with room in it, or onto the floor
+      landed[i] = 1u;
+      if (cnt > 1e-3) { let m = su / cnt; v = m + 0.3 * (v - m); } // a drop joins the water: most of its fall is spent
+    } else { landed[i] = c << 1u; }
   }
   vel[i] = v;
   body[i] = vec4<f32>(np, body[i].zw);

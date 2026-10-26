@@ -103,21 +103,21 @@ body {
   cursor: crosshair;
 }
 
-/* The about card is laid out near the top of the second screen and floats as a boat once the
-   fluid fills the lower 40% (NBodyCanvas moves `.boat`; `.boat-slot` keeps its place). */
+/* The about card is laid out low on the second screen, where the rising water reaches it, and
+   floats as a boat once it does (NBodyCanvas moves `.boat`; `.boat-slot` keeps its place). */
 .about {
   position: relative;
   height: 100vh;
   height: 100dvh;
   display: flex;
   justify-content: center;
-  padding: calc(56px + 6vh) 24px 0;
+  padding: 56px 24px 8vh;
   scroll-snap-align: start;
 }
 
 .boat-slot {
   width: min(900px, 100%);
-  align-self: flex-start; /* the slot must be exactly the card's size: the water reads the hull from it */
+  align-self: flex-end; /* the slot must be exactly the card's size: the water reads the hull from it */
 }
 
 /* A ship in profile (HULL_SHAPE in fluid.js draws the same outline for the water): a few lines
@@ -143,7 +143,7 @@ body {
     font-size: 15px;
   }
   .about {
-    padding-top: calc(56px + 3vh);
+    padding-bottom: 5vh;
   }
 }
 

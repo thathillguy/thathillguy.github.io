@@ -19,6 +19,7 @@ export class Boat {
     this.ceiling = 0;              // sim units kept clear at the top of the view (the top bar)
     this.top = -Infinity;          // world y of the top of the view the card lives on
     this.active = false;
+    this.held = false;             // docked where the page laid it out until the water can carry it (see step)
     this.wet = 0;                  // fraction of the hull's faces under pressure, for inspection
   }
 
@@ -81,6 +82,7 @@ export class Boat {
     const m = this.sigma * A, H = 2 * hh, I = (m * (W * W + H * H)) / 12;
     if (!(m > 0) || !Number.isFinite(fx + fy + tq)) { // no hull yet, or a bad pressure sample: fall freely
       if (!Number.isFinite(fx + fy + tq)) console.warn('boat: non-finite pressure force', { fx, fy, tq, wet, cols: fluid.cols, rows: fluid.rows, h: fluid.h });
+      if (this.held) return;
       this.vy += g * dt; this.y += this.vy * dt;
       return;
     }
@@ -92,6 +94,10 @@ export class Boat {
       al -= f * this.spin * this.om;
       if (this.moorX != null) ax -= this.moor * (x - this.moorX);
     } else al -= 0.3 * this.om;
+    // held: the page keeps the card where it laid it out until the rising water would lift it,
+    // so it is launched with no net force rather than dropped into the pool (a slap that flung
+    // thousands of stars)
+    if (this.held) { if (ay >= 0) return; this.held = false; }
     this.vx += ax * dt; this.vy += ay * dt; this.om += al * dt;
     this.x += this.vx * dt; this.y += this.vy * dt; this.th += this.om * dt;
     const lim = this.maxTilt;

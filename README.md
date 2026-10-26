@@ -22,9 +22,12 @@ horizon is drawn; the hole shows only through what it does to the field and the 
   second screen arrives the stars are let go a few at a time and fall as rain (gravity and air
   drag only, nothing to one another) out of the first screen into the second, where each drop
   becomes water as it lands: a weakly compressible particle fluid on a grid (deposit, blur,
-  pressure, viscosity, walls) that fills the lower 40% of that screen, with the about card
-  floating on it as a boat (boat.js). The state is snapshotted as the fall begins and the same
-  stars stream back to it when you scroll up.
+  pressure, viscosity, walls) that fills the lower 40% of that screen. A drop lands only where
+  the water has room, and only with a small chance per substep, because the galaxy cores rain
+  down denser than water and landing a column of them at once burst the pool. The about card
+  is docked low on that screen, sheds the rain off its sides, and is launched as a boat (boat.js)
+  the moment the rising water would lift it. The state is snapshotted as the fall begins and the
+  same stars stream back to it when you scroll up.
 - `site/src/sim/calibrate.js` times a short run at startup and sizes the star count to the device:
   about 100,000 on a laptop GPU, 15,000 on the CPU path, fewer on weaker hardware.
 - `site/src/sim/driver.js` keeps the sim real-time within a per-frame budget by adapting the

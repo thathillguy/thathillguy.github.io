@@ -13,7 +13,7 @@ const LENS_DISTANCE = 20;   // effective lens-to-source distance: rE = sqrt(2 rs
 const EASE_IN = 0.16, EASE_OUT = 0.24; // seconds for the warp to appear and fade
 const FALL_START = 0.6, FALL_END = 0.9; // scroll position, in viewport heights, over which the rain begins: as the about screen arrives
 const STIR_SPEED_CAP = 400; // sim units per sim second: a flung pointer is not a jet
-const BOAT_RELEASE = 0.1;   // the about card lets go as soon as the fall is under way, and drops with the stars
+const BOAT_RELEASE = 0.1;   // the fall must be this far along before the card can be launched
 
 /**
  * The simulation canvas. Sizes itself to the device at startup (see calibrate.js) unless `stars`
@@ -93,8 +93,9 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
       placeBoat(lead);
     };
 
-    // The about card is a boat once the page has fallen: it drops from where it is laid out,
-    // floats, and is eased back into place when the water is gone. The fluid sees its hull.
+    // The about card is a boat: it stays where the page laid it out while the rain falls past it,
+    // is launched the moment the rising water reaches its keel, floats, and is eased back into
+    // place when the water is gone. The fluid sees its hull throughout.
     const slotPose = () => {
       // where the page lays the card out (its slot, untransformed) and the card's own size
       const r = boatEl.parentElement.getBoundingClientRect();
@@ -106,14 +107,14 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
       const { tx, ty, hw, hh } = slotPose();
       boat.hw = hw; boat.hh = hh; boat.ceiling = 64 / pxPerUnit; boat.moorX = tx; boat.top = sim.floorY - 2 * sim.halfH;
       if (sim.fall >= BOAT_RELEASE && !sim.rewind) {
-        if (!boat.active) { boat.pin(tx, ty); boat.active = true; boatReturning = false; }
+        if (!boat.active) { boat.pin(tx, ty); boat.active = true; boat.held = true; boatReturning = false; } // docked until the water lifts it
         boat.step(dtSim, sim.fluid, driver.pressure, driver.positions, driver.velocities, sim.n, sim.halfW, sim.floorY, sim.fluid.o.g * sim.fall);
         if (![boat.x, boat.y, boat.th, boat.vx, boat.vy, boat.om].every(Number.isFinite)) {
           console.warn('boat went non-finite; reset', { hw, hh, wet: boat.wet, pressureFinite: Number.isFinite(driver.pressure[0]) });
           boat.pin(tx, ty); boat.active = true;
         }
       } else {
-        if (boat.active) { boat.active = false; boatReturning = true; }
+        if (boat.active) { boat.active = false; boat.held = false; boatReturning = true; }
         if (boatReturning) {
           boat.easeTo(tx, ty, 0.18);
           if (Math.hypot(boat.x - tx, boat.y - ty) < 0.05 && Math.abs(boat.th) < 0.002) { boat.pin(tx, ty); boatReturning = false; }

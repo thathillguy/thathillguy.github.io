@@ -5,6 +5,7 @@
 // The GPU engine runs the same scheme in compute shaders (see gpu.js).
 
 export const HULL_MARGIN = 0.6; // stars keep this far from the boat's edges
+export const SHED_SPEED = 30;   // sim units/s: rain shed off the card's sides leaves with up to this much sideways, so it lands spread out
 
 /**
  * The ship's profile as fractions of its box (x right, y down), clockwise from the top-left:
@@ -46,21 +47,29 @@ export function hullArea(hw, hh) {
 /**
  * For a point (lx, ly) in the hull's frame, the distance out through the nearest face and that
  * face's outward normal if the point is inside the hull grown by `margin`; null outside. The
- * deck is never the way out: rain that lands on the card passes behind it and drips from the
- * keel, rather than pooling on the page.
+ * deck is never the way out, so water never pools on the page. For rain (`shed`) neither is the
+ * keel: the card sheds rain off its sides, as a roof does. Rain let through to the water under
+ * the keel has nowhere to go but out the sides, and bursts out of them.
  */
-export function hullPush(lx, ly, hw, hh, margin = 0) {
+export function hullPush(lx, ly, hw, hh, margin = 0, shed = false) {
   let best = null;
   for (const e of hullEdges(hw, hh)) {
     const sd = (lx - e.x0) * e.nx + (ly - e.y0) * e.ny - margin; // signed distance, negative inside
     if (sd >= 0) return null;
-    if (e.ny < -0.9) continue; // the deck
+    if (e.ny < -0.9 || (shed && e.ny > 0.7)) continue; // the deck; and for rain, the keel
     if (!best || -sd < best.d) best = { d: -sd, nx: e.nx, ny: e.ny };
   }
   return best;
 }
 
+/** A fixed pseudo-random number in [0, 1) for star i, a cheap second one beside hash01 (the same in gpu.js). */
+export function shedScatter(i) { return (Math.imul(i, 2654435761) >>> 0) / 4294967296; }
+
 export const AIR_PRESSURE = 0.01; // as a fraction of K: the top few units of the pool, and everything above it, count as air
+export const LAND_FULL = 1.25;    // a drop lands only where the water is thinner than this (times rest density): the galaxy cores
+                                  // rain down denser than water, and landing all of it at once made the pool burst
+export const LAND_CHANCE = 0.03;  // ...and only this often per substep, so a dense column lands over many steps, each drop
+                                  // falling on through the water until it finds room; the pool has time to spread the arrivals
 
 export const FLUID = {
   cell: 1.2,        // grid spacing (sim units)
@@ -77,6 +86,7 @@ export class Fluid {
   constructor(o = {}) {
     this.o = { ...FLUID, ...o };
     this.cols = this.rows = 0;
+    this.tick = 0; // substeps so far, for the landing roll
   }
 
   /**
@@ -188,6 +198,7 @@ export class Fluid {
     const { x, y, vx, vy, ax, ay, relw, landed } = sim;
     const airDrag = sim.airDrag, airP = AIR_PRESSURE * K; // pressure below which a star is in air (see fluid kernel in gpu.js)
     const inv = 1 / h;
+    const roll = 0.6180339887 * ++this.tick; // each star's landing rolls run through a golden-ratio sequence
     count.fill(0); mx.fill(0); my.fill(0);
     // deposit: the water, not the rain
     for (let i = 0; i < n; i++) {
@@ -242,19 +253,23 @@ export class Fluid {
       if (px < left) { px = left; if (u < 0) u = -u * bounce; }
       else if (px > right) { px = right; if (u > 0) u = -u * bounce; }
       if (py > floor) { py = floor; if (v > 0) v = -v * bounce; }
+      let shed = false;
       if (hull) {
-        // inside the hull? push out through the nearest face, taking the hull's velocity
+        // inside the hull? push out through the nearest face, taking the hull's velocity; rain
+        // goes out the sides (hullPush) and is thrown a little clear of them
         const dx = px - hull.x, dy = py - hull.y;
         const lx = hull.c * dx + hull.s * dy, ly = -hull.s * dx + hull.c * dy;
-        const hit = hullPush(lx, ly, hull.hw, hull.hh, HULL_MARGIN);
+        const hit = hullPush(lx, ly, hull.hw, hull.hh, HULL_MARGIN, rain);
         if (hit) {
           const wnx = hull.c * hit.nx - hull.s * hit.ny, wny = hull.s * hit.nx + hull.c * hit.ny;
           px += wnx * hit.d; py += wny * hit.d;
           const rel = (u - hull.vx) * wnx + (v - hull.vy) * wny;
           if (rel < 0) { u -= rel * wnx * (1 + bounce); v -= rel * wny * (1 + bounce); }
+          if (rain) { shed = true; const sp = SHED_SPEED * (0.2 + 0.8 * shedScatter(i)); u += wnx * sp; v += wny * sp; }
         }
       }
-      if (rain && (cnt > 0.5 * rho0 || py > floor - h)) { // into the water, or onto the floor
+      if (rain && !shed && cnt < LAND_FULL * rho0 && (cnt > 0.5 * rho0 || py > floor - h) // into water with room in it, or onto the floor
+          && (shedScatter(i) + roll) % 1 < LAND_CHANCE) {
         landed[i] = 1;
         if (cnt > 1e-6) { u = su / cnt + 0.3 * (u - su / cnt); v = sv / cnt + 0.3 * (v - sv / cnt); } // a drop joins the water: most of its fall is spent
       }

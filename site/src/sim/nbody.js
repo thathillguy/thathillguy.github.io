@@ -25,7 +25,8 @@ export const DEFAULTS = {
   splashSpeed: 110,      // ...outward, by up to this much (sim units / s) at the centre
   stirRadius: 9,         // a finger dragged through the water carries the stars within this radius...
   stirBlend: 0.35,       // ...toward its velocity, by this fraction per step at the centre
-  releaseRate: 0.3,      // a fall lets the stars go a few at a time: the released fraction grows by this per sim second
+  releaseRate: 0.2,      // a fall lets the stars go a few at a time: the released fraction grows by this per sim second (the rain is
+                         // as dense as the galaxy column divided by the release time, and the pool can only swallow so much so fast)
   rainSpeed: 0.3,        // a released star falling through air settles to this fraction of the view height per second (rain, not shot)
   airDrag: null,         // or set the drag (1/s) directly; the default is derived from rainSpeed and the view
   coreSoftening: 5,      // Plummer softening of the cores
