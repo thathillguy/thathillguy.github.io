@@ -153,7 +153,7 @@ test('the about card floats: it settles with roughly its density fraction submer
   const sim = new NBody({ bodies: 12800, random: seeded(9), halfW: 32, halfH: 14, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
   sim.setFall(1);
   for (let k = 0; k < 60 * 4; k++) sim.step();
-  const boat = new Boat({ sigma: 0.4 });
+  const boat = new Boat({ sigma: 0.55 });
   boat.hw = 6; boat.hh = 2.5;
   boat.pin(0, -8); boat.active = true;
   const positions = new Float32Array(sim.cap * 4), velocities = new Float32Array(sim.cap * 2);
@@ -169,7 +169,7 @@ test('the about card floats: it settles with roughly its density fraction submer
   const surface = (yl + yr) / 2;
   const submerged = (boat.y + boat.hh - surface) / (2 * boat.hh);
   // the pool is still sloshing from the splash, so this is a floating check, not a still one
-  assert.ok(submerged > 0.15 && submerged < 0.75, `submerged fraction ${submerged.toFixed(2)}`);
+  assert.ok(submerged > 0.25 && submerged < 0.85, `submerged fraction ${submerged.toFixed(2)}`);
   assert.ok(Math.abs(boat.th) < 0.4, `tilt ${boat.th.toFixed(3)}`);
   assert.ok(Math.abs(boat.vy) < 8, `bobbing, vy ${boat.vy.toFixed(2)}`);
   assert.ok(boat.y + boat.hh < sim.halfH - 1, 'not resting on the floor');

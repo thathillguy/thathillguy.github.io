@@ -12,6 +12,7 @@ const TIME_SCALE = 0.5;     // sim seconds per real second
 const LENS_DISTANCE = 20;   // effective lens-to-source distance: rE = sqrt(2 rs D)
 const EASE_IN = 0.16, EASE_OUT = 0.24; // seconds for the warp to appear and fade
 const FALL_START = 0.04, FALL_END = 0.55; // scroll position, in viewport heights, over which the page falls
+const BOAT_RELEASE = 0.1;   // the about card lets go as soon as the fall is under way, and drops with the stars
 
 /**
  * The simulation canvas. Sizes itself to the device at startup (see calibrate.js) unless `stars`
@@ -96,7 +97,7 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
       if (!boatEl || !sim) return;
       const { tx, ty, hw, hh } = slotPose();
       boat.hw = hw; boat.hh = hh; boat.ceiling = 64 / pxPerUnit; boat.moorX = tx;
-      if (sim.fall >= 0.5 && !sim.rewind) {
+      if (sim.fall >= BOAT_RELEASE && !sim.rewind) {
         if (!boat.active) { boat.pin(tx, ty); boat.active = true; boatReturning = false; }
         boat.step(dtSim, driver.positions, driver.velocities, sim.n, sim.halfW, sim.halfH, sim.fluid.o.g * sim.fall);
       } else {

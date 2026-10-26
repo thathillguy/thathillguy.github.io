@@ -9,7 +9,7 @@ const COLUMN = 4;      // width of the surface-measuring columns beside the hull
 
 export class Boat {
   constructor(o = {}) {
-    this.sigma = o.sigma ?? 0.4;  // density relative to the fluid: the fraction of the height submerged at rest
+    this.sigma = o.sigma ?? 0.55; // density relative to the fluid: the fraction of the height submerged at rest
     this.drag = o.drag ?? 2.5;    // 1/s, toward the water's velocity, along
     this.heave = o.heave ?? 6;    // 1/s, up and down: water resists a hull bobbing far more than sliding
     this.spin = o.spin ?? 6.0;    // 1/s, angular damping
@@ -113,6 +113,7 @@ export class Boat {
     if (this.x - ext < -halfW) { this.x = -halfW + ext; this.vx = Math.abs(this.vx) * 0.3; }
     if (this.x + ext > halfW) { this.x = halfW - ext; this.vx = -Math.abs(this.vx) * 0.3; }
     if (this.y + ey > halfH) { this.y = halfH - ey; this.vy = -Math.abs(this.vy) * 0.2; this.om *= 0.5; }
-    if (this.y - ey < -halfH + this.ceiling) { this.y = -halfH + this.ceiling + ey; this.vy = Math.max(this.vy, 0); }
+    const over = -halfH + this.ceiling - (this.y - ey);
+    if (over > 0) { this.vy += (40 * over - 4 * Math.min(this.vy, 0)) * dt; } // a soft ceiling: pushed back down, not nailed
   }
 }
