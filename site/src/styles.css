@@ -109,7 +109,7 @@ body {
 }
 
 .boat-slot {
-  width: min(820px, 100%);
+  width: min(900px, 100%);
   align-self: flex-start; /* the slot must be exactly the card's size: the water reads the hull from it */
 }
 
@@ -119,7 +119,7 @@ body {
 .boat {
   position: relative;
   padding: 24px 16% 40px 7%;
-  font-size: clamp(17px, 1.5vw, 22px);
+  font-size: clamp(16px, 1.3vw, 19px);
   line-height: 1.45;
   color: var(--ink);
   transform-origin: 50% 50%;
@@ -127,7 +127,7 @@ body {
 }
 
 .boat .deck {
-  max-width: 30em;
+  max-width: 36em;
 }
 
 .boat .hull {
