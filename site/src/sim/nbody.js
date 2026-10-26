@@ -22,6 +22,8 @@ export const DEFAULTS = {
   poolFraction: 0.4,     // when the page falls, the fluid fills this much of the viewport's height
   splashRadius: 14,      // a tap on the water kicks the stars within this radius...
   splashSpeed: 110,      // ...outward, by up to this much (sim units / s) at the centre
+  stirRadius: 9,         // a finger dragged through the water carries the stars within this radius...
+  stirBlend: 0.35,       // ...toward its velocity, by this fraction per step at the centre
   coreSoftening: 5,      // Plummer softening of the cores
   softening: 1,          // Plummer softening between stars
   separation: 110,       // starting distance between the two cores (their apoapsis)
@@ -131,6 +133,7 @@ export class NBody {
     this.fluid = new Fluid();
     this.boat = null;     // the about card's hull while the page is fallen: { x, y, c, s, hw, hh, vx, vy }
     this.pending = null;  // a splash waiting for the next fluid step: { x, y, r, a }
+    this.stir = null;     // the pointer held in the water: { x, y, vx, vy } (sim units, sim seconds)
     this.fallen = false;
     this.snap = null;     // the state the moment a fall began: x, y, vx, vy, and the nebula cores
     this.rewind = null;   // { step, total } while the stars are being carried back to the snapshot
@@ -233,6 +236,14 @@ export class NBody {
     if (this.fall <= 0 || this.rewind) return;
     this.pending = { x, y, r: this.o.splashRadius, a: this.o.splashSpeed };
   }
+
+  /** A finger in the water at (x, y) moving at (vx, vy): the water nearby is dragged along each step. */
+  setStir(x, y, vx, vy) {
+    if (this.fall <= 0 || this.rewind) { this.stir = null; return; }
+    this.stir = { x, y, vx, vy };
+  }
+
+  clearStir() { this.stir = null; }
 
   setHole(x, y) {
     if (this.hole == null) {
@@ -530,6 +541,7 @@ export class NBody {
     else this._holePull();
     this.fluid.fit(this.halfW, this.halfH, n, this.o.poolFraction);
     if (this.pending) { this.fluid.impulse(this, n, this.pending); this.pending = null; }
+    if (this.stir) this.fluid.stir(this, n, this.stir, this.o.stirRadius, this.o.stirBlend);
     const sub = this.fluid.o.substeps;
     for (let s = 0; s < sub; s++) this.fluid.substep(this, n, dt / sub, fall);
     this.cull();

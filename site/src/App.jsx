@@ -37,23 +37,26 @@ export default function App() {
         <div className="deck">
           <div>
             <p>
-              I'm Robert, a senior software engineer at AcuityMD in Toronto. I lead a small team
-              building forecasting and analytics for medical device sales: live dashboards over
-              millions of rows, a CRM integration layer that talks to Salesforce, HubSpot, Dynamics
-              and Zoho, and the backend under all of it. Before that I was an architect at
-              Rackspace, moving clients onto the cloud and tracking airline carts over IoT, and
-              before that I helped build Canada's next search-and-rescue system at MDA in Halifax.
+              I'm Robert, a software engineer in Toronto. I've spent about a decade building
+              data-heavy products: the analytics people look at, the backends underneath them, the
+              integrations that tie systems together, and the infrastructure that keeps it all
+              shipping. These days I'm a senior engineer at AcuityMD, where I lead a small team.
+              Before that I was a cloud architect at Rackspace, worked on search-and-rescue systems
+              in Halifax, and started out in health tech in Vancouver.
             </p>
           </div>
           <div>
             <p>
-              I like problems that sit between data and product, where the work is making a slow
-              query fast or a tangled system simple. I studied computer science at UBC in Kelowna.
+              I like problems that sit between data and product, where the work is making something
+              slow fast or something tangled simple, and I'd rather own a system end to end than a
+              slice of it. I studied computer science at UBC in Kelowna, and I build things like
+              this page for fun.
             </p>
             <p>
               The galaxies above are {count} under gravity, computed on your {where} every frame.
-              Scroll back up and press anywhere to drop a black hole in; press here to make a
-              splash. Some version of this simulation has lived on this page since 2017.
+              Scroll back up and press anywhere to drop a black hole in. Down here, a tap is a stone
+              and a drag is a finger through the water. Some version of this simulation has lived on
+              this page since 2017.
             </p>
           </div>
         </div>

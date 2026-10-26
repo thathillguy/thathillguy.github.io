@@ -122,6 +122,8 @@ struct FParams {
   bc: f32, bs: f32, bhw: f32, bhh: f32,
   bvx: f32, bvy: f32, hasBoat: f32, margin: f32,
   ix: f32, iy: f32, ir: f32, ia: f32,
+  sx: f32, sy: f32, svx: f32, svy: f32,
+  sr: f32, sb: f32, hasStir: f32, pad: f32,
 }
 // the ship's profile, as fractions of its box (HULL_SHAPE in fluid.js)
 const SHAPE = array<vec2<f32>, 5>(vec2<f32>(0.0, 0.0), vec2<f32>(0.92, 0.0), vec2<f32>(1.0, 0.4), vec2<f32>(0.86, 1.0), vec2<f32>(0.06, 1.0));
@@ -218,6 +220,18 @@ fn impulse(@builtin(global_invocation_id) gid: vec3<u32>) {
   vel[i] += d * (q.ia * w * w / dist);
 }
 
+// a finger in the water: blends the stars near it toward its velocity (see Fluid.stir)
+@compute @workgroup_size(${WG})
+fn stir(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= q.n) { return; }
+  let d = body[i].xy - vec2<f32>(q.sx, q.sy);
+  let d2 = dot(d, d);
+  if (d2 >= q.sr * q.sr) { return; }
+  let w = 1.0 - sqrt(d2) / q.sr;
+  vel[i] += (vec2<f32>(q.svx, q.svy) - vel[i]) * (q.sb * w * w);
+}
+
 @compute @workgroup_size(${WG})
 fn fluid(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
@@ -309,7 +323,7 @@ export function createGpuEngine(device, sim) {
   const fbgl0 = device.createBindGroupLayout({ entries: [{ binding: 0, ...st('uniform') }, { binding: 1, ...st('storage') }, { binding: 2, ...st('storage') }, { binding: 3, ...st('storage') }] });
   const fbgl1 = device.createBindGroupLayout({ entries: [0, 1, 2, 3].map((b) => ({ binding: b, ...st('storage') })) });
   const flayout = device.createPipelineLayout({ bindGroupLayouts: [fbgl0, fbgl1] });
-  for (const name of ['gridClear', 'splat', 'fold', 'blurX', 'blurY', 'fluid', 'impulse']) {
+  for (const name of ['gridClear', 'splat', 'fold', 'blurX', 'blurY', 'fluid', 'impulse', 'stir']) {
     pipelines[name] = device.createComputePipeline({ layout: flayout, compute: { module: fmodule, entryPoint: name } });
   }
 
@@ -328,7 +342,7 @@ export function createGpuEngine(device, sim) {
   const densBuf = device.createBuffer({ size: maxCells * 4, usage });
   const tmpBuf = device.createBuffer({ size: maxCells * 4, usage });
   const presBuf = device.createBuffer({ size: maxCells * 4, usage });
-  const fparams = device.createBuffer({ size: 144, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const fparams = device.createBuffer({ size: 176, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const readPres = [0, 1].map(() => device.createBuffer({ size: maxCells * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }));
   const pressure = new Float32Array(maxCells); // the fluid's pressure grid, for the boat
   let presCells = 0;                            // cells copied in the readback in flight
@@ -383,16 +397,17 @@ export function createGpuEngine(device, sim) {
     new Float32Array(paramData, 8, 4).set([sim.o.dt, sim.o.softening ** 2, 1 - sim.fall, rewindS]);
     device.queue.writeBuffer(params, 0, paramData);
   };
-  const fdata = new ArrayBuffer(144);
+  const fdata = new ArrayBuffer(176);
   const writeFluidParams = (useAcc) => {
     const f = sim.fluid, o = f.o, hole = sim.hole, b = sim.boat;
     new Uint32Array(fdata, 0, 4).set([n, f.cols, f.rows, f.cols * f.rows]);
-    const im = sim.pending;
-    new Float32Array(fdata, 16, 32).set([
+    const im = sim.pending, st = sim.stir;
+    new Float32Array(fdata, 16, 40).set([
       f.h, f.ox, f.oy, f.rho0, o.K, o.cohesion, o.visc, o.g, sim.fall, sim.o.dt / o.substeps, sim.halfW, sim.halfH, o.bounce,
       hole == null ? 0 : sim.cx[hole], hole == null ? 0 : sim.cy[hole], hole == null ? 0 : sim.cm[hole], hole == null ? 1 : sim.ce2[hole], useAcc ? 1 : 0,
       b ? b.x : 0, b ? b.y : 0, b ? b.c : 1, b ? b.s : 0, b ? b.hw : 0, b ? b.hh : 0, b ? b.vx : 0, b ? b.vy : 0, b ? 1 : 0, HULL_MARGIN,
       im ? im.x : 0, im ? im.y : 0, im ? im.r : 0, im ? im.a : 0,
+      st ? st.x : 0, st ? st.y : 0, st ? st.vx : 0, st ? st.vy : 0, sim.o.stirRadius, sim.o.stirBlend, st ? 1 : 0, 0,
     ]);
     device.queue.writeBuffer(fparams, 0, fdata);
   };
@@ -475,6 +490,7 @@ export function createGpuEngine(device, sim) {
           rewindS = 0;
           writeParams(); writeCores(); writeFluidParams(mu > 1e-3);
           if (sim.pending) { dispatchFluid(enc, 'impulse', n); sim.pending = null; }
+          if (sim.stir) dispatchFluid(enc, 'stir', n);
           if (mu > 1e-3) { coreAccel(); dispatch(enc, 'force'); }
           for (let t = 0; t < sim.fluid.o.substeps; t++) {
             dispatchFluid(enc, 'gridClear', cells);

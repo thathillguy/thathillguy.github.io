@@ -12,6 +12,7 @@ const TIME_SCALE = 0.5;     // sim seconds per real second
 const LENS_DISTANCE = 20;   // effective lens-to-source distance: rE = sqrt(2 rs D)
 const EASE_IN = 0.16, EASE_OUT = 0.24; // seconds for the warp to appear and fade
 const FALL_START = 0.04, FALL_END = 0.55; // scroll position, in viewport heights, over which the page falls
+const STIR_SPEED_CAP = 400; // sim units per sim second: a flung pointer is not a jet
 const BOAT_RELEASE = 0.1;   // the about card lets go as soon as the fall is under way, and drops with the stars
 
 /**
@@ -136,6 +137,7 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
         busy = true;
         driver.tick(dt, BUDGET).then((steps) => { if (steps) updateBoat(steps * sim.o.dt); }).catch((e) => console.error(e)).finally(() => { busy = false; });
       }
+      settleStir(now);
       draw(dt, now);
       raf = requestAnimationFrame(frame);
     };
@@ -150,29 +152,49 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
     window.addEventListener('scroll', onScroll, { passive: true });
     ready.then(onScroll);
 
-    // The pointer is read on the window so a press anywhere but a control places the hole.
-    let pointerId = null;
+    // The pointer is read on the window so a press anywhere but a control counts. On the galaxies
+    // a press places the black hole and its lens; on the pool it is a stone (a splash) and then a
+    // finger in the water, dragging the water along while it moves.
+    let press = null; // { id, pool, x, y, t, vx, vy }: the current press, with the pointer's smoothed velocity
     const isControl = (el) => !!el?.closest?.('a, button, input, textarea, select, .topbar');
+    const toSim = (e) => [(e.clientX - width / 2) / pxPerUnit, (e.clientY - height / 2) / pxPerUnit];
     const place = (e) => {
-      if (!sim) return;
-      const px = e.clientX, py = e.clientY;
-      sim.setHole((px - width / 2) / pxPerUnit, (py - height / 2) / pxPerUnit);
-      lensState.x = px; lensState.y = py;
+      sim.setHole(...toSim(e));
+      lensState.x = e.clientX; lensState.y = e.clientY;
       lensState.cx = e.clientX; lensState.cy = e.clientY;
     };
     const onDown = (e) => {
-      if ((e.button !== undefined && e.button !== 0) || pointerId !== null || !sim || isControl(e.target)) return;
-      pointerId = e.pointerId;
-      lensState.target = 1;
-      place(e);
-      sim.splash((e.clientX - width / 2) / pxPerUnit, (e.clientY - height / 2) / pxPerUnit); // only while the page is fallen
+      if ((e.button !== undefined && e.button !== 0) || press || !sim || isControl(e.target)) return;
+      const pool = sim.fall > 0;
+      press = { id: e.pointerId, pool, x: e.clientX, y: e.clientY, t: e.timeStamp, vx: 0, vy: 0 };
+      if (!e.target.closest?.('.boat')) document.body.classList.add('pressing'); // a drag from the water must not select the card's text
+      if (pool) { sim.splash(...toSim(e)); sim.setStir(...toSim(e), 0, 0); }
+      else { lensState.target = 1; place(e); }
     };
-    const onMove = (e) => { if (e.pointerId === pointerId) place(e); };
+    const onMove = (e) => {
+      if (!press || e.pointerId !== press.id) return;
+      if (!press.pool) { place(e); return; }
+      // pointer velocity in sim units per sim second (the sim runs at TIME_SCALE of real time)
+      const dt = Math.max(4, e.timeStamp - press.t) / 1000, k = 1 / (pxPerUnit * TIME_SCALE * dt);
+      press.vx += ((e.clientX - press.x) * k - press.vx) * 0.5;
+      press.vy += ((e.clientY - press.y) * k - press.vy) * 0.5;
+      const speed = Math.hypot(press.vx, press.vy), cap = STIR_SPEED_CAP;
+      if (speed > cap) { press.vx *= cap / speed; press.vy *= cap / speed; }
+      press.x = e.clientX; press.y = e.clientY; press.t = e.timeStamp;
+      sim.setStir(...toSim(e), press.vx, press.vy);
+    };
     const onUp = (e) => {
-      if (e.pointerId !== pointerId) return;
-      pointerId = null;
-      sim?.clearHole();
-      lensState.target = 0;
+      if (!press || e.pointerId !== press.id) return;
+      if (press.pool) sim?.clearStir();
+      else { sim?.clearHole(); lensState.target = 0; }
+      press = null;
+      document.body.classList.remove('pressing');
+    };
+    // a finger that stops moving sends no more events: let its velocity die away so the water does too
+    const settleStir = (now) => {
+      if (!press?.pool || !sim || now - press.t < 90 || (press.vx === 0 && press.vy === 0)) return;
+      press.vx = press.vy = 0;
+      sim.setStir((press.x - width / 2) / pxPerUnit, (press.y - height / 2) / pxPerUnit, 0, 0);
     };
     window.addEventListener('pointerdown', onDown);
     window.addEventListener('pointermove', onMove);

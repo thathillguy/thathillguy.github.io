@@ -208,3 +208,23 @@ test('a splash throws the water outward from the tap and nowhere else', () => {
   assert.ok(far > 500 && farFast < 0.02 * far, `${farFast} of ${far} far stars disturbed`);
   assert.ok(sim.energy() > before, 'the tap put energy in');
 });
+
+test('a finger dragged through the water carries the water near it along', () => {
+  const sim = new NBody({ bodies: 9000, random: seeded(4), halfW: 36, halfH: 14, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
+  sim.setFall(1);
+  for (let k = 0; k < 60 * 5; k++) sim.step();
+  const sx = 0, sy = sim.halfH - 3;
+  sim.setStir(sx, sy, 60, 0); // moving right
+  for (let k = 0; k < 6; k++) sim.step();
+  let near = 0, along = 0, far = 0, farFast = 0;
+  for (let i = 0; i < sim.n; i++) {
+    const d = Math.hypot(sim.x[i] - sx, sim.y[i] - sy);
+    if (d < sim.o.stirRadius * 0.5) { near++; if (sim.vx[i] > 15) along++; }
+    else if (d > sim.o.stirRadius * 2) { far++; if (Math.abs(sim.vx[i]) > 30) farFast++; }
+  }
+  assert.ok(near > 30, `${near} stars under the finger`);
+  assert.ok(along > 0.7 * near, `${along} of ${near} carried along`);
+  assert.ok(far > 500 && farFast < 0.02 * far, `${farFast} of ${far} far stars disturbed`);
+  sim.clearStir();
+  assert.equal(sim.stir, null);
+});

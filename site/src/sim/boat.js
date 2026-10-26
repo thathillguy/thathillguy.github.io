@@ -41,10 +41,13 @@ export class Boat {
     const ext = Math.abs(c) * hw + Math.abs(s) * hh;
     const W = 2 * hw;
 
-    // pressure on every face but the deck, sampled a little outside each face
+    // pressure on every face but the deck, sampled a little outside each face. Before the grid's
+    // first fit (a scroll can release the boat between a tick and this call) there is no field
+    // to sample yet: the boat simply falls for that frame.
+    const fitted = fluid.cols > 1 && fluid.rows > 1 && pressure.length >= fluid.cols * fluid.rows;
     const A = hullArea(hw, hh), out = 0.8 * fluid.h;
     let fx = 0, fy = 0, tq = 0, wet = 0, total = 0;
-    for (const e of hullEdges(hw, hh)) {
+    for (const e of fitted ? hullEdges(hw, hh) : []) {
       if (e.ny < -0.9) continue; // the deck
       const N = Math.max(2, Math.round(e.len / (W / 16))), ds = e.len / N;
       const wnx = c * e.nx - s * e.ny, wny = s * e.nx + c * e.ny;   // world normal (outward)

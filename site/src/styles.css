@@ -15,6 +15,11 @@ body {
   margin: 0;
 }
 
+body.pressing {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 body {
   background: var(--paper);
   color: var(--ink);

@@ -101,6 +101,19 @@ export class Fluid {
     }
   }
 
+  /** A finger dragged through the water: the stars within r of (x, y) are blended toward the
+   *  finger's velocity, fully at the centre and not at all at the edge. Held still, it damps. */
+  stir(sim, n, { x, y, vx: sx, vy: sy }, r, blend) {
+    const { x: px, y: py, vx, vy } = sim;
+    const r2 = r * r;
+    for (let i = 0; i < n; i++) {
+      const dx = px[i] - x, dy = py[i] - y, d2 = dx * dx + dy * dy;
+      if (d2 >= r2) continue;
+      const w = 1 - Math.sqrt(d2) / r, k = blend * w * w;
+      vx[i] += (sx - vx[i]) * k; vy[i] += (sy - vy[i]) * k;
+    }
+  }
+
   /** The pressure at a world point, bilinear on the cell centres of `pres` (a grid laid out like this one's). */
   pressureAt(pres, wx, wy) {
     const { cols, rows, h, ox, oy } = this;
