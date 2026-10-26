@@ -24,6 +24,9 @@ export default function App() {
       <section className="about" id="about">
         <div className="boat-slot">
         <div ref={boat} className="boat">
+        <svg className="hull" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+          <polygon points="0,0 100,0 88,100 12,100" vectorEffect="non-scaling-stroke" />
+        </svg>
         <h2>About</h2>
         <p>
           I'm Robert, a software engineer at [company] in [city], where I [what you do, in one

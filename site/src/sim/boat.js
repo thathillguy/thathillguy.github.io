@@ -4,6 +4,8 @@
 // motion; gravity. The fluid treats the hull as a solid wall (see fluid.js and gpu.js).
 // Units are the simulation's; y points down.
 
+import { HULL_TAPER } from './fluid.js';
+
 const K_SURFACE = 8;   // the k-th highest star in a column marks the surface (the rest is spray)
 const COLUMN = 4;      // width of the surface-measuring columns beside the hull
 
@@ -73,8 +75,10 @@ export class Boat {
     const xl = (xl0 + xl1) / 2, xr = (xr0 + xr1) / 2;
     const surfaceAt = (wx) => yl + ((yr - yl) * (wx - xl)) / (xr - xl);
 
-    // pressure on the hull's bottom and sides, hydrostatic below the interpolated surface
-    const W = 2 * hw, H = 2 * hh, A = W * H;
+    // pressure on the hull's bottom and tapered sides, hydrostatic below the interpolated surface
+    const W = 2 * hw, H = 2 * hh, taper = HULL_TAPER;
+    const Wb = W * (1 - 2 * taper);            // width at the bottom
+    const A = (H * (W + Wb)) / 2;
     let fx = 0, fy = 0, tq = 0, wet = 0;
     const sample = (lx, ly, nx, ny, ds) => {
       const wx = x + c * lx - s * ly, wy = y + s * lx + c * ly;   // world point
@@ -88,11 +92,13 @@ export class Boat {
       wet += ds;
     };
     const NB = 12, NS = 4;
-    for (let i = 0; i < NB; i++) sample(-hw + (W * (i + 0.5)) / NB, hh, 0, 1, W / NB);
+    for (let i = 0; i < NB; i++) sample(-Wb / 2 + (Wb * (i + 0.5)) / NB, hh, 0, 1, Wb / NB);
+    const slope = (taper * W) / H;             // the sides lean in by this much per unit of depth
+    const inv = 1 / Math.hypot(1, slope), ds = (H / NS) / inv;
     for (let i = 0; i < NS; i++) {
-      const ly = -hh + (H * (i + 0.5)) / NS;
-      sample(-hw, ly, -1, 0, H / NS);
-      sample(hw, ly, 1, 0, H / NS);
+      const t = (i + 0.5) / NS, ly = -hh + H * t, half = hw - taper * W * t;
+      sample(-half, ly, -inv, slope * inv, ds);
+      sample(half, ly, inv, slope * inv, ds);
     }
     const m = this.sigma * A, I = (m * (W * W + H * H)) / 12;
     let ax = fx / m, ay = fy / m + g, al = tq / I;

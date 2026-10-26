@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { NBody, circularSpeed } from './nbody.js';
 import { Boat } from './boat.js';
+import { hullPush } from './fluid.js';
 
 // Deterministic stand-in for Math.random (Park-Miller).
 function seeded(seed = 42) {
@@ -174,6 +175,10 @@ test('the about card floats: it settles with roughly its density fraction submer
   assert.ok(Math.abs(boat.vy) < 8, `bobbing, vy ${boat.vy.toFixed(2)}`);
   assert.ok(boat.y + boat.hh < sim.halfH - 1, 'not resting on the floor');
   let inside = 0;
-  for (let i = 0; i < sim.n; i++) if (Math.abs(sim.x[i] - boat.x) < boat.hw && Math.abs(sim.y[i] - boat.y) < boat.hh) inside++;
+  const c = Math.cos(boat.th), sn = Math.sin(boat.th);
+  for (let i = 0; i < sim.n; i++) {
+    const dx = sim.x[i] - boat.x, dy = sim.y[i] - boat.y;
+    if (hullPush(c * dx + sn * dy, -sn * dx + c * dy, boat.hw, boat.hh)) inside++;
+  }
   assert.equal(inside, 0, 'no star inside the hull');
 });

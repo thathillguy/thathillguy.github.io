@@ -5,6 +5,27 @@
 // The GPU engine runs the same scheme in compute shaders (see gpu.js).
 
 export const HULL_MARGIN = 0.6; // stars keep this far from the boat's edges
+export const HULL_TAPER = 0.12; // each side of the hull slopes in by this fraction of its width, top to bottom
+
+/**
+ * For a point (lx, ly) in the hull's frame (y down, origin at the centre of its box), the
+ * smallest distance to a face if the point is inside the tapered hull, with that face's outward
+ * normal; null outside. The hull is hw wide at the deck, hw * (1 - 2 taper) at the bottom.
+ */
+export function hullPush(lx, ly, hw, hh, taper = HULL_TAPER) {
+  if (Math.abs(ly) >= hh) return null;
+  const k = (taper * hw) / hh;          // the sides' inward slope per unit of depth, times 2
+  const half = hw - taper * hw * ((ly + hh) / hh); // half-width at this depth
+  if (Math.abs(lx) >= half) return null;
+  const inv = 1 / Math.hypot(1, k / 2);
+  const dTop = ly + hh, dBottom = hh - ly;
+  const dRight = (half - lx) * inv, dLeft = (half + lx) * inv;
+  let d = dTop, nx = 0, ny = -1;
+  if (dBottom < d) { d = dBottom; nx = 0; ny = 1; }
+  if (dRight < d) { d = dRight; nx = inv; ny = (k / 2) * inv; }
+  if (dLeft < d) { d = dLeft; nx = -inv; ny = (k / 2) * inv; }
+  return { d, nx, ny };
+}
 
 export const FLUID = {
   cell: 1.2,        // grid spacing (sim units)
@@ -133,14 +154,10 @@ export class Fluid {
         // inside the hull? push out through the nearest face, taking the hull's velocity
         const dx = px - hull.x, dy = py - hull.y;
         const lx = hull.c * dx + hull.s * dy, ly = -hull.s * dx + hull.c * dy;
-        const ex = hull.hw + HULL_MARGIN, ey = hull.hh + HULL_MARGIN;
-        if (Math.abs(lx) < ex && Math.abs(ly) < ey) {
-          const ox = ex - Math.abs(lx), oy = ey - Math.abs(ly);
-          let nx, ny; // outward normal in the hull frame
-          if (ox < oy) { nx = Math.sign(lx) || 1; ny = 0; } else { nx = 0; ny = Math.sign(ly) || 1; }
-          const wnx = hull.c * nx - hull.s * ny, wny = hull.s * nx + hull.c * ny;
-          const push = Math.min(ox, oy);
-          px += wnx * push; py += wny * push;
+        const hit = hullPush(lx, ly, hull.hw + HULL_MARGIN, hull.hh + HULL_MARGIN);
+        if (hit) {
+          const wnx = hull.c * hit.nx - hull.s * hit.ny, wny = hull.s * hit.nx + hull.c * hit.ny;
+          px += wnx * hit.d; py += wny * hit.d;
           const rel = (u - hull.vx) * wnx + (v - hull.vy) * wny;
           if (rel < 0) { u -= rel * wnx * (1 + bounce); v -= rel * wny * (1 + bounce); }
         }
