@@ -11,7 +11,7 @@ const BUDGET = 10;          // ms of physics per frame before the timestep coars
 const TIME_SCALE = 0.5;     // sim seconds per real second
 const LENS_DISTANCE = 20;   // effective lens-to-source distance: rE = sqrt(2 rs D)
 const EASE_IN = 0.16, EASE_OUT = 0.24; // seconds for the warp to appear and fade
-const FALL_START = 0.04, FALL_END = 0.55; // scroll position, in viewport heights, over which the page falls
+const FALL_START = 0.6, FALL_END = 0.9; // scroll position, in viewport heights, over which the rain begins: as the about screen arrives
 const STIR_SPEED_CAP = 400; // sim units per sim second: a flung pointer is not a jet
 const BOAT_RELEASE = 0.1;   // the about card lets go as soon as the fall is under way, and drops with the stars
 
@@ -40,6 +40,10 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
       pxPerUnit = Math.min(width, height) / UNITS;
     };
     measure();
+
+    // The world is the whole page, two screens tall: the galaxies on the first, the pool floored
+    // by the second. The canvas is fixed and looks at the part of the world the page is scrolled to.
+    const viewY = () => window.scrollY / pxPerUnit;
 
     // Find the GPU, time it (or the CPU), then make as many stars as the device carries.
     let driver = null, sim = null, engine = null, disposed = false;
@@ -79,6 +83,7 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
       const ease = lensState.k * lensState.k * (3 - 2 * lensState.k);
       renderer.lens(lensState.x * dpr, lensState.y * dpr, einsteinRadius() * dpr, ease);
       warp?.set(lensState.cx, lensState.cy, ease);
+      renderer.view(0, viewY());
       // upload a physics state once, then move the stars on along their velocities each frame
       const fresh = driver.stateAt !== uploadedState;
       uploadedState = driver.stateAt;
@@ -94,15 +99,15 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
       // where the page lays the card out (its slot, untransformed) and the card's own size
       const r = boatEl.parentElement.getBoundingClientRect();
       const w = boatEl.offsetWidth, h = boatEl.offsetHeight;
-      return { tx: (r.left + w / 2 - width / 2) / pxPerUnit, ty: (r.top + h / 2 - height / 2) / pxPerUnit, hw: w / 2 / pxPerUnit, hh: h / 2 / pxPerUnit };
+      return { tx: (r.left + w / 2 - width / 2) / pxPerUnit, ty: (r.top + h / 2 - height / 2) / pxPerUnit + viewY(), hw: w / 2 / pxPerUnit, hh: h / 2 / pxPerUnit };
     };
     const updateBoat = (dtSim) => {
       if (!boatEl || !sim) return;
       const { tx, ty, hw, hh } = slotPose();
-      boat.hw = hw; boat.hh = hh; boat.ceiling = 64 / pxPerUnit; boat.moorX = tx;
+      boat.hw = hw; boat.hh = hh; boat.ceiling = 64 / pxPerUnit; boat.moorX = tx; boat.top = sim.floorY - 2 * sim.halfH;
       if (sim.fall >= BOAT_RELEASE && !sim.rewind) {
         if (!boat.active) { boat.pin(tx, ty); boat.active = true; boatReturning = false; }
-        boat.step(dtSim, sim.fluid, driver.pressure, driver.positions, driver.velocities, sim.n, sim.halfW, sim.halfH, sim.fluid.o.g * sim.fall);
+        boat.step(dtSim, sim.fluid, driver.pressure, driver.positions, driver.velocities, sim.n, sim.halfW, sim.floorY, sim.fluid.o.g * sim.fall);
         if (![boat.x, boat.y, boat.th, boat.vx, boat.vy, boat.om].every(Number.isFinite)) {
           console.warn('boat went non-finite; reset', { hw, hh, wet: boat.wet, pressureFinite: Number.isFinite(driver.pressure[0]) });
           boat.pin(tx, ty); boat.active = true;
@@ -140,7 +145,7 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
     if (reduceMotion) draw(0, performance.now());
     else raf = requestAnimationFrame(frame);
 
-    // Scrolling down lets the page fall: the field hands over to a uniform downward one.
+    // Scrolling carries the galaxies up with the page; once the about screen has arrived, the rain begins.
     const onScroll = () => {
       const t = Math.min(Math.max((window.scrollY / window.innerHeight - FALL_START) / (FALL_END - FALL_START), 0), 1);
       sim?.setFall(t * t * (3 - 2 * t));
@@ -153,7 +158,7 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
     // finger in the water, dragging the water along while it moves.
     let press = null; // { id, pool, x, y, t, vx, vy }: the current press, with the pointer's smoothed velocity
     const isControl = (el) => !!el?.closest?.('a, button, input, textarea, select, .topbar');
-    const toSim = (e) => [(e.clientX - width / 2) / pxPerUnit, (e.clientY - height / 2) / pxPerUnit];
+    const toSim = (e) => [(e.clientX - width / 2) / pxPerUnit, (e.clientY - height / 2) / pxPerUnit + viewY()];
     const place = (e) => {
       sim.setHole(...toSim(e));
       lensState.x = e.clientX; lensState.y = e.clientY;
@@ -190,7 +195,7 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
     const settleStir = (now) => {
       if (!press?.pool || !sim || now - press.t < 90 || (press.vx === 0 && press.vy === 0)) return;
       press.vx = press.vy = 0;
-      sim.setStir((press.x - width / 2) / pxPerUnit, (press.y - height / 2) / pxPerUnit, 0, 0);
+      sim.setStir((press.x - width / 2) / pxPerUnit, (press.y - height / 2) / pxPerUnit + viewY(), 0, 0);
     };
     window.addEventListener('pointerdown', onDown);
     window.addEventListener('pointermove', onMove);

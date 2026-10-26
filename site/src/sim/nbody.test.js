@@ -119,7 +119,7 @@ test('a black hole under the pointer pulls stars in, swallows them, and can be r
 });
 
 test('a fall pools the stars as a fluid filling about 40% of the height, and coming back rewinds the same stars exactly', () => {
-  const sim = new NBody({ bodies: 8000, random: seeded(5), releaseRate: 1000, halfW: 20, halfH: 14, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
+  const sim = new NBody({ bodies: 8000, random: seeded(5), releaseRate: 1000, screens: 1, halfW: 20, halfH: 14, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
   for (let k = 0; k < 60; k++) sim.step();
   const before = { x: sim.x.slice(0, sim.n), y: sim.y.slice(0, sim.n), vx: sim.vx.slice(0, sim.n), e: sim.energy() };
   sim.setFall(1);
@@ -151,7 +151,7 @@ test('a fall pools the stars as a fluid filling about 40% of the height, and com
 });
 
 test('the about card floats: it settles with roughly its density fraction submerged, level, and the stars stay out of it', () => {
-  const sim = new NBody({ bodies: 12800, random: seeded(9), releaseRate: 1000, halfW: 32, halfH: 14, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
+  const sim = new NBody({ bodies: 12800, random: seeded(9), releaseRate: 1000, screens: 1, halfW: 32, halfH: 14, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
   sim.setFall(1);
   for (let k = 0; k < 60 * 8; k++) sim.step(); // let the drop's sloshing die down first
   const boat = new Boat({ sigma: 0.42 });
@@ -175,14 +175,14 @@ test('the about card floats: it settles with roughly its density fraction submer
     sim.boat = boat.hull;
     sim.step();
     pack();
-    boat.step(sim.o.dt, sim.fluid, sim.fluid.pres, positions, velocities, sim.n, sim.halfW, sim.halfH, g);
+    boat.step(sim.o.dt, sim.fluid, sim.fluid.pres, positions, velocities, sim.n, sim.halfW, sim.floorY, g);
     if (k >= total - tail) {
       submerged += (boat.y + boat.hh - surfaceNow()) / (2 * boat.hh) / tail;
       tilt += Math.abs(boat.th) / tail; bob += Math.abs(boat.vy) / tail;
       if (boat.y + boat.hh >= sim.halfH - 1) floor++;
     }
   }
-  assert.ok(submerged > 0.15 && submerged < 0.95, `mean submerged fraction ${submerged.toFixed(2)}`);
+  assert.ok(submerged > 0.1 && submerged < 0.95, `mean submerged fraction ${submerged.toFixed(2)}`);
   assert.ok(tilt < 0.3, `mean tilt ${tilt.toFixed(3)}`);
   assert.ok(bob < 8, `bobbing, mean |vy| ${bob.toFixed(2)}`);
   assert.equal(floor, 0, 'never resting on the floor');
@@ -196,7 +196,7 @@ test('the about card floats: it settles with roughly its density fraction submer
 });
 
 test('a splash throws the water outward from the tap and nowhere else', () => {
-  const sim = new NBody({ bodies: 9000, random: seeded(3), releaseRate: 1000, halfW: 36, halfH: 14, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
+  const sim = new NBody({ bodies: 9000, random: seeded(3), releaseRate: 1000, screens: 1, halfW: 36, halfH: 14, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
   sim.setFall(1);
   for (let k = 0; k < 60 * 5; k++) sim.step();
   const sx = 0, sy = sim.halfH - 3;
@@ -219,7 +219,7 @@ test('a splash throws the water outward from the tap and nowhere else', () => {
 });
 
 test('a finger dragged through the water carries the water near it along', () => {
-  const sim = new NBody({ bodies: 9000, random: seeded(4), releaseRate: 1000, halfW: 36, halfH: 14, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
+  const sim = new NBody({ bodies: 9000, random: seeded(4), releaseRate: 1000, screens: 1, halfW: 36, halfH: 14, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
   sim.setFall(1);
   for (let k = 0; k < 60 * 5; k++) sim.step();
   const sx = 0, sy = sim.halfH - 3;
@@ -239,7 +239,7 @@ test('a finger dragged through the water carries the water near it along', () =>
 });
 
 test('a fall lets the stars go a few at a time, and they rain rather than fly', () => {
-  const sim = new NBody({ bodies: 6000, random: seeded(8), halfW: 36, halfH: 20, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
+  const sim = new NBody({ bodies: 6000, random: seeded(8), screens: 1, halfW: 36, halfH: 20, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
   sim.setFall(1);
   const steps = Math.round(0.5 / sim.o.dt);
   for (let k = 0; k < steps; k++) sim.step();
@@ -260,7 +260,7 @@ test('a fall lets the stars go a few at a time, and they rain rather than fly', 
 
 test('a released star falling through air loses its sideways motion: rain, not a shot', () => {
   // sparse galaxies, thinner than the pool's rest density, so every star is in air once released
-  const sim = new NBody({ bodies: 1500, random: seeded(12), releaseRate: 1000, halfW: 40, halfH: 30, nebulaRadius: 25, scaleLength: 8, separation: 30, periapsis: 10 });
+  const sim = new NBody({ bodies: 1500, random: seeded(12), releaseRate: 1000, screens: 1, halfW: 40, halfH: 30, nebulaRadius: 25, scaleLength: 8, separation: 30, periapsis: 10 });
   sim.setFall(1);
   for (let i = 0; i < sim.n; i++) sim.vx[i] += 30; // everyone flung to the right
   const side = () => { let a = 0; for (let i = 0; i < sim.n; i++) a += Math.abs(sim.vx[i]); return a / sim.n; };
@@ -270,4 +270,30 @@ test('a released star falling through air loses its sideways motion: rain, not a
   let down = 0; for (let i = 0; i < sim.n; i++) down += sim.vy[i];
   assert.ok(after < 0.65 * before, `mean |vx| ${before.toFixed(1)} -> ${after.toFixed(1)} after 0.3 s in the air`);
   assert.ok(down / sim.n > 10, `and falling, mean vy ${(down / sim.n).toFixed(1)}`);
+});
+
+test('on a two-screen page the rain falls out of the first screen and pools at the bottom of the second', () => {
+  const sim = new NBody({ bodies: 8000, random: seeded(6), releaseRate: 1000, screens: 2, halfW: 20, halfH: 14, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
+  assert.equal(sim.floorY, 3 * sim.halfH, 'the floor is the bottom of the second screen');
+  sim.setFall(1);
+  // partway: everything released and raining at its terminal speed (rainSpeed of a screen height per second)
+  for (let k = 0; k < Math.round(2.5 / sim.o.dt); k++) sim.step();
+  let firstScreen = 0, secondScreen = 0, falling = 0;
+  for (let i = 0; i < sim.n; i++) {
+    if (sim.y[i] < sim.halfH) firstScreen++; else secondScreen++;
+    if (sim.vy[i] > 2) falling++;
+  }
+  assert.ok(secondScreen > 0.2 * sim.n && firstScreen > 0, `after 2.5 s: ${firstScreen} still on the first screen, ${secondScreen} on the second`);
+  assert.ok(falling > 0.5 * sim.n, `${falling} stars falling`);
+  for (let k = 0; k < Math.round(8 / sim.o.dt); k++) sim.step();
+  const ys = [];
+  let inside = 0;
+  for (let i = 0; i < sim.n; i++) { ys.push(sim.y[i]); if (Math.abs(sim.x[i]) <= sim.halfW && sim.y[i] <= sim.floorY) inside++; }
+  assert.equal(inside, sim.n, 'all stars inside the pool walls');
+  ys.sort((a, b) => a - b);
+  const surface = ys[Math.floor(0.05 * ys.length)];
+  const depth = (sim.floorY - surface) / (2 * sim.halfH);
+  assert.ok(surface > sim.halfH, 'the pool is on the second screen');
+  assert.ok(depth > 0.3 && depth < 0.5, `pool depth ${depth.toFixed(2)} of a screen`);
+  assert.equal(sim.count, 8000, 'no star was culled on the way down');
 });

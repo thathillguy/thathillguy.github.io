@@ -45,13 +45,16 @@ export function hullArea(hw, hh) {
 
 /**
  * For a point (lx, ly) in the hull's frame, the distance out through the nearest face and that
- * face's outward normal if the point is inside the hull grown by `margin`; null outside.
+ * face's outward normal if the point is inside the hull grown by `margin`; null outside. The
+ * deck is never the way out: rain that lands on the card passes behind it and drips from the
+ * keel, rather than pooling on the page.
  */
 export function hullPush(lx, ly, hw, hh, margin = 0) {
   let best = null;
   for (const e of hullEdges(hw, hh)) {
     const sd = (lx - e.x0) * e.nx + (ly - e.y0) * e.ny - margin; // signed distance, negative inside
     if (sd >= 0) return null;
+    if (e.ny < -0.9) continue; // the deck
     if (!best || -sd < best.d) best = { d: -sd, nx: e.nx, ny: e.ny };
   }
   return best;
@@ -76,11 +79,16 @@ export class Fluid {
     this.cols = this.rows = 0;
   }
 
-  /** Size the grid to the viewport and set the rest density so n stars fill `fraction` of the height. */
-  fit(halfW, halfH, n, fraction) {
+  /**
+   * Size the grid to the world: halfW either side, from the top of the first screen (-halfH) down
+   * to the floor at floorY; and set the rest density so n stars fill `fraction` of one screen's
+   * height (2 halfH) above the floor.
+   */
+  fit(halfW, halfH, floorY, n, fraction) {
     const { maxCells } = this.o;
-    const h = Math.max(this.o.cell, (2 * halfW) / (maxCells - 2), (2 * halfH) / (maxCells - 2));
-    const cols = Math.ceil((2 * halfW) / h) + 2, rows = Math.ceil((2 * halfH) / h) + 2;
+    const tall = floorY + halfH;
+    const h = Math.max(this.o.cell, (2 * halfW) / (maxCells - 2), tall / (maxCells - 2));
+    const cols = Math.ceil((2 * halfW) / h) + 2, rows = Math.ceil(tall / h) + 2;
     if (cols !== this.cols || rows !== this.rows) {
       this.cols = cols; this.rows = rows;
       this.count = new Float32Array(cols * rows);
@@ -92,7 +100,7 @@ export class Fluid {
     }
     this.h = h;
     this.ox = -halfW - h; this.oy = -halfH - h; // cell (0,0) sits just outside the top-left corner
-    this.halfW = halfW; this.halfH = halfH;
+    this.halfW = halfW; this.halfH = halfH; this.floorY = floorY;
     // stars per cell at rest, lowered a little because the pool compresses under its own weight
     const depth = fraction * 2 * halfH;
     this.rho0 = ((n / (2 * halfW * depth)) * h * h) / (1 + (0.5 * this.o.g * depth) / this.o.K);
@@ -167,22 +175,24 @@ export class Fluid {
    */
   /**
    * One substep. Each star takes part by its release weight sim.relw[i] (0: still a galaxy star,
-   * carried only by its galaxy acceleration; 1: water): it deposits that much, feels that much
-   * gravity, and pressure and viscosity by its square, so a star falls first and becomes fluid
-   * as it lands. In air a released star is slowed toward a rain's terminal speed.
+   * carried only by its galaxy acceleration). A released star is rain until it lands: it falls
+   * under gravity, slowed toward a rain's terminal speed, and is nothing to the other drops. It
+   * lands when it reaches the floor or water already landed (sim.landed[i]); from then on it is
+   * water: it deposits, and feels pressure and viscosity. Water thrown up into the air (where
+   * nothing presses) is slowed like rain too.
    */
   substep(sim, n, dtf) {
     const { cols, rows, h, ox, oy, rho0, count, mx, my, pres } = this;
     const hull = sim.boat;
     const { K, cohesion, visc, g, bounce } = this.o;
-    const { x, y, vx, vy, ax, ay, relw } = sim;
-    const airDrag = sim.o.airDrag, airP = AIR_PRESSURE * K; // pressure below which a star is in air (see fluid kernel in gpu.js)
+    const { x, y, vx, vy, ax, ay, relw, landed } = sim;
+    const airDrag = sim.airDrag, airP = AIR_PRESSURE * K; // pressure below which a star is in air (see fluid kernel in gpu.js)
     const inv = 1 / h;
     count.fill(0); mx.fill(0); my.fill(0);
-    // deposit
+    // deposit: the water, not the rain
     for (let i = 0; i < n; i++) {
       const rw = relw[i];
-      if (rw <= 0) continue;
+      if (rw <= 0 || !landed[i]) continue;
       const fx = (x[i] - ox) * inv - 0.5, fy = (y[i] - oy) * inv - 0.5;
       const cx = Math.min(Math.max(Math.floor(fx), 0), cols - 2), cy = Math.min(Math.max(Math.floor(fy), 0), rows - 2);
       const tx = Math.min(Math.max(fx - cx, 0), 1), ty = Math.min(Math.max(fy - cy, 0), 1);
@@ -198,14 +208,15 @@ export class Fluid {
     const { smooth } = this;
     for (let c = 0; c < cols * rows; c++) pres[c] = K * Math.max(smooth[c] / rho0 - 1, -cohesion);
     // gather and move
-    const left = -this.halfW + 0.3, right = this.halfW - 0.3, floor = this.halfH - 0.3;
+    const left = -this.halfW + 0.3, right = this.halfW - 0.3, floor = this.floorY - 0.3;
     for (let i = 0; i < n; i++) {
       const rw = relw[i];
       if (rw <= 0) { // still a galaxy star: its galaxy acceleration only
         vx[i] += ax[i] * dtf; vy[i] += ay[i] * dtf; x[i] += vx[i] * dtf; y[i] += vy[i] * dtf;
         continue;
       }
-      const ps = rw * rw, gs = ps * 0.5 * inv, gg = g * rw, vs = visc * ps;
+      const rain = !landed[i];
+      const ps = rain ? 0 : rw * rw, gs = ps * 0.5 * inv, gg = g * rw, vs = visc * ps;
       const fx = (x[i] - ox) * inv - 0.5, fy = (y[i] - oy) * inv - 0.5;
       const cx = Math.min(Math.max(Math.floor(fx), 1), cols - 3), cy = Math.min(Math.max(Math.floor(fy), 1), rows - 3);
       const tx = Math.min(Math.max(fx - cx, 0), 1), ty = Math.min(Math.max(fy - cy, 0), 1);
@@ -221,9 +232,9 @@ export class Fluid {
         cnt += w * count[cc]; su += w * mx[cc]; sv += w * my[cc]; pl += w * pres[cc];
       }
       let u = vx[i], v = vy[i];
-      if (cnt > 1e-6) { u += vs * (su / cnt - u); v += vs * (sv / cnt - v); }
+      if (!rain && cnt > 1e-6) { u += vs * (su / cnt - u); v += vs * (sv / cnt - v); }
       // air is wherever the water is not pressing: unpressurised, so a star in it falls like rain
-      const air = Math.max(0, 1 - pl / airP), slow = Math.min(1, airDrag * rw * air * dtf);
+      const air = rain ? 1 : Math.max(0, 1 - pl / airP), slow = Math.min(1, airDrag * rw * air * dtf);
       u -= u * slow; v -= v * slow;
       u += (ax[i] - gx * gs) * dtf;
       v += (ay[i] - gy * gs + gg) * dtf;
@@ -242,6 +253,10 @@ export class Fluid {
           const rel = (u - hull.vx) * wnx + (v - hull.vy) * wny;
           if (rel < 0) { u -= rel * wnx * (1 + bounce); v -= rel * wny * (1 + bounce); }
         }
+      }
+      if (rain && (cnt > 0.5 * rho0 || py > floor - h)) { // into the water, or onto the floor
+        landed[i] = 1;
+        if (cnt > 1e-6) { u = su / cnt + 0.3 * (u - su / cnt); v = sv / cnt + 0.3 * (v - sv / cnt); } // a drop joins the water: most of its fall is spent
       }
       x[i] = px; y[i] = py; vx[i] = u; vy[i] = v;
     }

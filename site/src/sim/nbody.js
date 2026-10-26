@@ -20,12 +20,14 @@ export const DEFAULTS = {
   scaleLength: 12,       // exponential disc scale length: surface density falls as exp(-r / h)
   dispersion: 0.08,      // random radial / tangential velocity kick, as a fraction of circular speed
   poolFraction: 0.4,     // when the page falls, the fluid fills this much of the viewport's height
+  screens: 2,            // the page is this many viewport heights tall: the galaxies fill the first, the pool floors the last
   splashRadius: 14,      // a tap on the water kicks the stars within this radius...
   splashSpeed: 110,      // ...outward, by up to this much (sim units / s) at the centre
   stirRadius: 9,         // a finger dragged through the water carries the stars within this radius...
   stirBlend: 0.35,       // ...toward its velocity, by this fraction per step at the centre
   releaseRate: 0.3,      // a fall lets the stars go a few at a time: the released fraction grows by this per sim second
-  airDrag: 2.5,          // a released star falling through air loses this fraction of its speed per second (rain, not shot)
+  rainSpeed: 0.3,        // a released star falling through air settles to this fraction of the view height per second (rain, not shot)
+  airDrag: null,         // or set the drag (1/s) directly; the default is derived from rainSpeed and the view
   coreSoftening: 5,      // Plummer softening of the cores
   softening: 1,          // Plummer softening between stars
   separation: 110,       // starting distance between the two cores (their apoapsis)
@@ -159,6 +161,7 @@ export class NBody {
     this.stir = null;     // the pointer held in the water: { x, y, vx, vy } (sim units, sim seconds)
     this.release = 0;     // the fraction of stars let go so far in this fall (chases `fall` at releaseRate)
     this.relw = new Float32Array(this.cap); // each star's release weight for the current fluid step
+    this.landed = new Uint8Array(this.cap); // 1 once a released star has reached the water or the floor: rain until then
     this.fallen = false;
     this.snap = null;     // the state the moment a fall began: x, y, vx, vy, and the nebula cores
     this.rewind = null;   // { step, total } while the stars are being carried back to the snapshot
@@ -194,6 +197,12 @@ export class NBody {
     this.halfH = halfH;
   }
 
+  /** The floor of the world: the bottom of the page's last screen (the first is centred on 0). */
+  get floorY() { return (2 * this.o.screens - 1) * this.halfH; }
+
+  /** Drag on a released star in air, 1/s: whatever brings it to rainSpeed of the view height per second. */
+  get airDrag() { return this.o.airDrag ?? this.fluid.o.g / (this.o.rainSpeed * 2 * this.halfH); }
+
   get count() {
     return this.n;
   }
@@ -224,6 +233,7 @@ export class NBody {
       x: x.slice(0, n), y: y.slice(0, n), vx: vx.slice(0, n), vy: vy.slice(0, n),
       cx: this.cx.slice(0, 2), cy: this.cy.slice(0, 2), cvx: this.cvx.slice(0, 2), cvy: this.cvy.slice(0, 2),
     };
+    this.landed.fill(0, 0, n); // a new fall: everyone is rain again until they land
     this.sortPaused = true; // slots must keep their stars until the snapshot is restored or dropped
     this.snapshotRequested = true;
   }
@@ -571,7 +581,7 @@ export class NBody {
     for (let i = 0; i < n; i++) relw[i] = releaseWeight(i, this.release);
     if (this.release < 1) this._accelerate(); // the galaxies go on for the stars still in them
     else this._holePull();
-    this.fluid.fit(this.halfW, this.halfH, n, this.o.poolFraction);
+    this.fluid.fit(this.halfW, this.halfH, this.floorY, n, this.o.poolFraction);
     if (this.pending) { this.fluid.impulse(this, n, this.pending); this.pending = null; }
     if (this.stir) this.fluid.stir(this, n, this.stir, this.o.stirRadius, this.o.stirBlend);
     const sub = this.fluid.o.substeps;
@@ -628,7 +638,7 @@ export class NBody {
   cull() {
     const { x, y, n } = this;
     const dead = this._dead;
-    const far = 3 * Math.max(this.halfW, this.halfH), far2 = far * far;
+    const far = Math.max(3 * Math.max(this.halfW, this.halfH), this.floorY + this.halfW), far2 = far * far; // the pool's corners are not an escape
     let changed = 0;
     for (let i = 0; i < n; i++) {
       if (x[i] * x[i] + y[i] * y[i] > far2) { dead[i] = 1; this.stats.escaped++; changed++; }

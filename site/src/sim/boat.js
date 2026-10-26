@@ -17,6 +17,7 @@ export class Boat {
     this.x = 0; this.y = 0; this.vx = 0; this.vy = 0; this.th = 0; this.om = 0;
     this.hw = 1; this.hh = 1;
     this.ceiling = 0;              // sim units kept clear at the top of the view (the top bar)
+    this.top = -Infinity;          // world y of the top of the view the card lives on
     this.active = false;
     this.wet = 0;                  // fraction of the hull's faces under pressure, for inspection
   }
@@ -33,9 +34,9 @@ export class Boat {
   /**
    * Advance by dt. `fluid` is the grid (for its layout) and `pressure` its pressure field;
    * `positions` (x, y, m, r per star) and `velocities` (vx, vy) give the water's motion near
-   * the hull; the pool's walls are at ±halfW and its floor at halfH; g is the downward field.
+   * the hull; the pool's walls are at ±halfW and its floor at floorY; g is the downward field.
    */
-  step(dt, fluid, pressure, positions, velocities, n, halfW, halfH, g) {
+  step(dt, fluid, pressure, positions, velocities, n, halfW, floorY, g) {
     const { x, y, hw, hh } = this;
     const c = Math.cos(this.th), s = Math.sin(this.th);
     const ext = Math.abs(c) * hw + Math.abs(s) * hh;
@@ -100,8 +101,8 @@ export class Boat {
     const ey = Math.abs(s) * hw + Math.abs(c) * hh;
     if (this.x - ext < -halfW) { this.x = -halfW + ext; this.vx = Math.abs(this.vx) * 0.3; }
     if (this.x + ext > halfW) { this.x = halfW - ext; this.vx = -Math.abs(this.vx) * 0.3; }
-    if (this.y + ey > halfH) { this.y = halfH - ey; this.vy = -Math.abs(this.vy) * 0.2; this.om *= 0.5; }
-    const over = -halfH + this.ceiling - (this.y - ey);
+    if (this.y + ey > floorY) { this.y = floorY - ey; this.vy = -Math.abs(this.vy) * 0.2; this.om *= 0.5; }
+    const over = this.top + this.ceiling - (this.y - ey);
     if (over > 0) { this.vy += (40 * over - 4 * Math.min(this.vy, 0)) * dt; }
   }
 }

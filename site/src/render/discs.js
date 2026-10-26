@@ -14,13 +14,14 @@ layout(location = 3) in vec2 a_vel;    // velocity, sim units per second
 uniform vec2 u_res;
 uniform float u_ppu;
 uniform float u_lead;                  // seconds of sim time since the physics state: extrapolate
+uniform vec2 u_view;                   // the sim point at the centre of the canvas (the page scrolls the view down the world)
 out vec2 v_p;
 out float v_r;
 flat out int v_c;
 void main() {
   float rpx = a_inst.w * u_ppu;
   float ext = max(rpx + 1.5, 2.6);
-  vec2 centre = (a_inst.xy + a_vel * u_lead) * u_ppu + u_res * 0.5;
+  vec2 centre = (a_inst.xy + a_vel * u_lead - u_view) * u_ppu + u_res * 0.5;
   vec2 px = centre + a_corner * ext;
   vec2 clip = px / u_res * 2.0 - 1.0;
   gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
@@ -117,7 +118,7 @@ function createWebGL(canvas) {
 
   const discProg = program(gl, DISC_VS, DISC_FS);
   gl.useProgram(discProg);
-  const du = { res: gl.getUniformLocation(discProg, 'u_res'), ppu: gl.getUniformLocation(discProg, 'u_ppu'), lead: gl.getUniformLocation(discProg, 'u_lead') };
+  const du = { res: gl.getUniformLocation(discProg, 'u_res'), ppu: gl.getUniformLocation(discProg, 'u_ppu'), lead: gl.getUniformLocation(discProg, 'u_lead'), view: gl.getUniformLocation(discProg, 'u_view') };
   gl.uniform3fv(gl.getUniformLocation(discProg, 'u_palette'), new Float32Array(PALETTE.flatMap(hexToRgb)));
 
   const quad = gl.createBuffer();
@@ -171,7 +172,7 @@ function createWebGL(canvas) {
   gl.clearColor(1, 1, 1, 1);
 
   let width = 1, height = 1;
-  const lens = { x: 0, y: 0, rE: 0, k: 0 };
+  const lens = { x: 0, y: 0, rE: 0, k: 0 }, view = { x: 0, y: 0 };
 
   return {
     kind: 'webgl2',
@@ -204,6 +205,7 @@ function createWebGL(canvas) {
       if (velocities) { gl.bindBuffer(gl.ARRAY_BUFFER, velBuf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, velocities, 0, count * 2); }
       if (colours) { gl.bindBuffer(gl.ARRAY_BUFFER, colBuf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, colours, 0, count); }
       gl.uniform1f(du.lead, lead);
+      gl.uniform2f(du.view, view.x, view.y);
       if (count) gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -219,6 +221,8 @@ function createWebGL(canvas) {
     },
     /** Warp the frame around (x, y) in device pixels, y down, with Einstein radius rE; k in 0..1 is the strength. */
     lens(x, y, rE, k) { lens.x = x; lens.y = y; lens.rE = rE; lens.k = k; },
+    /** Centre the canvas on the sim point (x, y). */
+    view(x, y) { view.x = x; view.y = y; },
     dispose() {
       // keep the context (a canvas can only hand out one kind); free what we made
       gl.deleteProgram(discProg); gl.deleteProgram(lensProg);
@@ -232,7 +236,7 @@ function createWebGL(canvas) {
 function create2D(canvas) {
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('canvas has no usable rendering context');
-  let width = 1, height = 1, ppu = 1, cols = null, pos = null;
+  let width = 1, height = 1, ppu = 1, cols = null, pos = null, vx = 0, vy = 0;
   const TAU = Math.PI * 2;
   return {
     kind: '2d',
@@ -246,12 +250,13 @@ function create2D(canvas) {
       ctx.fillRect(0, 0, width, height);
       for (let i = 0, k = 0; i < count; i++, k += 4) {
         if (!positions) break;
-        const x = positions[k] * ppu + width / 2, y = positions[k + 1] * ppu + height / 2, r = Math.max(positions[k + 3] * ppu, 0.6);
+        const x = (positions[k] - vx) * ppu + width / 2, y = (positions[k + 1] - vy) * ppu + height / 2, r = Math.max(positions[k + 3] * ppu, 0.6);
         ctx.fillStyle = PALETTE[cols ? cols[i] | 0 : 0];
         ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
       }
     },
     lens() {}, // the 2D fallback cannot warp; the hole shows only through the stars
+    view(x, y) { vx = x; vy = y; },
     dispose() {},
   };
 }
