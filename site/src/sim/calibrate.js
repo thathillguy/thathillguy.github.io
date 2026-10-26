@@ -6,7 +6,7 @@ import { createGpuEngine } from './gpu.js';
 
 export const GPU_STEP_MS = 28;  // ~15 states per second at the coarse timestep, with headroom
 export const CPU_STEP_MS = 16;
-const GPU_RANGE = [20000, 160000];
+const GPU_RANGE = [10000, 160000];
 const CPU_RANGE = [3000, 30000];
 
 const clamp = (n, [lo, hi]) => Math.max(lo, Math.min(hi, Math.floor(n / 1000) * 1000));
@@ -26,12 +26,18 @@ async function timeGpu(device, bodies) {
 }
 
 export async function calibrateGpu(device, { limit = GPU_RANGE[1], stepMs = GPU_STEP_MS } = {}) {
-  const n1 = 32000, n2 = 64000; // big enough that the n^2 term dominates the fixed overhead
+  // A small first probe says how fast the device is; the two fitted probes are then sized so
+  // the larger takes a few milliseconds a step, whether this is a phone or a workstation.
+  const n0 = 8000;
+  const t0 = await timeGpu(device, n0);
+  const n2 = Math.round(Math.min(64000, Math.max(16000, n0 * Math.sqrt(6 / Math.max(t0, 0.2)))) / 1000) * 1000;
+  const n1 = n2 / 2;
   const [t1, t2] = [await timeGpu(device, n1), await timeGpu(device, n2)];
   const b = (t2 - t1) / (n2 * n2 - n1 * n1);
   const a = t1 - b * n1 * n1;
-  if (!(b > 0) || !(stepMs > a)) return { bodies: clamp(Math.min(limit, 60000), GPU_RANGE), probe: { t1, t2 } };
-  return { bodies: clamp(Math.min(limit, Math.sqrt((stepMs - a) / b)), GPU_RANGE), probe: { t1, t2 } };
+  const probe = { n1, n2, t0, t1, t2 };
+  if (!(b > 0) || !(stepMs > a)) return { bodies: clamp(Math.min(limit, n2), GPU_RANGE), probe };
+  return { bodies: clamp(Math.min(limit, Math.sqrt((stepMs - a) / b)), GPU_RANGE), probe };
 }
 
 export function calibrateCpu({ limit = CPU_RANGE[1], stepMs = CPU_STEP_MS } = {}) {

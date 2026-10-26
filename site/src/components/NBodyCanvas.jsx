@@ -67,7 +67,7 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null }
     const lensState = { x: 0, y: 0, k: 0, target: 0 };
     let uploadedState = -1;
     const draw = (dt, now) => {
-      if (!sim) return;
+      if (!sim) { renderer.draw(null, null, null, 0); return; } // blank paper until the stars exist
       const rate = lensState.target > lensState.k ? dt / EASE_IN : dt / EASE_OUT;
       lensState.k += Math.max(-rate, Math.min(rate, lensState.target - lensState.k));
       const ease = lensState.k * lensState.k * (3 - 2 * lensState.k);
