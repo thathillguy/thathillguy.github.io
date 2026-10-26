@@ -20,6 +20,24 @@ export default function App() {
           <Typewriter />
         </div>
       </main>
+      <section className="about" id="about">
+        <h2>About</h2>
+        <p>
+          I'm Robert, a software engineer at [company] in [city], where I [what you do, in one
+          line]. Before that I [previous thing worth a line]. I like problems that sit between
+          data and product, and I like building things that move.
+        </p>
+        <p>
+          The galaxies above are 100,000 stars under gravity, computed on your GPU every frame.
+          Some version of this simulation has lived on this page since 2017.
+        </p>
+        <p className="links">
+          <a href="mailto:[email]">Email</a>
+          <a href="/resume.pdf">Resume</a>
+          <a href="https://github.com/thathillguy" rel="me noopener">GitHub</a>
+          <a href="https://www.linkedin.com/in/robert-hill-470068a8/" rel="me noopener">LinkedIn</a>
+        </p>
+      </section>
     </>
   );
 }

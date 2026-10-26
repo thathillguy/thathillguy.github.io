@@ -115,3 +115,21 @@ test('a black hole under the pointer pulls stars in, swallows them, and can be r
   for (let k = 0; k < 10; k++) sim.step();
   assert.equal(sim.count, 2000);
 });
+
+test('a fall banks every star at the bottom edge, and coming back refills the discs', () => {
+  const sim = new NBody({ bodies: 1500, random: seeded(5) });
+  sim.setFall(1);
+  for (let k = 0; k < 120 * 6; k++) sim.step();
+  const bottom = sim.halfH, depth = sim.o.bankDepth + 0.5;
+  let banked = 0;
+  for (let i = 0; i < sim.n; i++) if (sim.y[i] > bottom - depth && sim.y[i] <= bottom) banked++;
+  assert.ok(banked > 0.97 * sim.n, `${banked} of ${sim.n} in the bank`);
+  sim.setFall(0);
+  assert.ok(sim.recovering);
+  for (let k = 0; k < 120; k++) sim.step();
+  assert.ok(!sim.recovering, 'recovery finishes');
+  let still = 0;
+  for (let i = 0; i < sim.n; i++) if (sim.y[i] > bottom - depth) still++;
+  assert.ok(still < 0.02 * sim.n, `${still} still banked`);
+  assert.equal(sim.count, 1500);
+});

@@ -10,6 +10,7 @@ const BUDGET = 10;          // ms of physics per frame before the timestep coars
 const TIME_SCALE = 0.5;     // sim seconds per real second
 const LENS_DISTANCE = 20;   // effective lens-to-source distance: rE = sqrt(2 rs D)
 const EASE_IN = 0.16, EASE_OUT = 0.24; // seconds for the warp to appear and fade
+const FALL_START = 0.04, FALL_END = 0.55; // scroll position, in viewport heights, over which the page falls
 
 /**
  * The simulation canvas. Sizes itself to the device at startup (see calibrate.js) unless `stars`
@@ -27,9 +28,8 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null }
 
     let width = 1, height = 1, dpr = 1, pxPerUnit = 1;
     const measure = () => {
-      const rect = canvas.getBoundingClientRect();
-      width = Math.max(1, rect.width);
-      height = Math.max(1, rect.height);
+      width = Math.max(1, window.innerWidth);
+      height = Math.max(1, window.innerHeight);
       dpr = Math.min(window.devicePixelRatio || 1, 2);
       pxPerUnit = Math.min(width, height) / UNITS;
     };
@@ -96,19 +96,27 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null }
     if (reduceMotion) draw(0, performance.now());
     else raf = requestAnimationFrame(frame);
 
+    // Scrolling down lets the page fall: the field hands over to a uniform downward one.
+    const onScroll = () => {
+      const t = Math.min(Math.max((window.scrollY / window.innerHeight - FALL_START) / (FALL_END - FALL_START), 0), 1);
+      sim?.setFall(t * t * (3 - 2 * t));
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    ready.then(onScroll);
+
+    // The pointer is read on the window so a press anywhere but a control places the hole.
     let pointerId = null;
+    const isControl = (el) => !!el?.closest?.('a, button, input, textarea, select, .topbar');
     const place = (e) => {
       if (!sim) return;
-      const rect = canvas.getBoundingClientRect();
-      const px = e.clientX - rect.left, py = e.clientY - rect.top;
+      const px = e.clientX, py = e.clientY;
       sim.setHole((px - width / 2) / pxPerUnit, (py - height / 2) / pxPerUnit);
       lensState.x = px; lensState.y = py;
       lensState.cx = e.clientX; lensState.cy = e.clientY;
     };
     const onDown = (e) => {
-      if ((e.button !== undefined && e.button !== 0) || pointerId !== null || !sim) return;
+      if ((e.button !== undefined && e.button !== 0) || pointerId !== null || !sim || isControl(e.target)) return;
       pointerId = e.pointerId;
-      try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic or already-released pointer */ }
       lensState.target = 1;
       place(e);
     };
@@ -119,24 +127,25 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null }
       sim?.clearHole();
       lensState.target = 0;
     };
-    canvas.addEventListener('pointerdown', onDown);
-    canvas.addEventListener('pointermove', onMove);
-    canvas.addEventListener('pointerup', onUp);
-    canvas.addEventListener('pointercancel', onUp);
+    window.addEventListener('pointerdown', onDown);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
 
     const onVisibility = () => { last = performance.now(); }; // no catch-up burst after a hidden tab
     document.addEventListener('visibilitychange', onVisibility);
-    const ro = new ResizeObserver(() => { fit(); if (reduceMotion) draw(0, performance.now()); });
-    ro.observe(canvas);
+    const onResize = () => { fit(); onScroll(); if (reduceMotion) draw(0, performance.now()); };
+    window.addEventListener('resize', onResize);
 
     return () => {
       cancelAnimationFrame(raf);
-      ro.disconnect();
+      window.removeEventListener('resize', onResize);
       document.removeEventListener('visibilitychange', onVisibility);
-      canvas.removeEventListener('pointerdown', onDown);
-      canvas.removeEventListener('pointermove', onMove);
-      canvas.removeEventListener('pointerup', onUp);
-      canvas.removeEventListener('pointercancel', onUp);
+      window.removeEventListener('scroll', onScroll);
+      window.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
       disposed = true;
       engine?.destroy();
       warp?.dispose();

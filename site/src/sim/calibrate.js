@@ -16,10 +16,10 @@ async function timeGpu(device, bodies) {
   const engine = createGpuEngine(device, sim);
   let best = Infinity;
   await engine.advance(2); // pipelines compile on the first dispatch
-  for (let k = 0; k < 2; k++) {
+  for (let k = 0; k < 3; k++) {
     const t = performance.now();
-    await engine.advance(5);
-    best = Math.min(best, (performance.now() - t) / 5);
+    await engine.advance(4);
+    best = Math.min(best, (performance.now() - t) / 4);
   }
   engine.destroy(true);
   return best;
@@ -28,9 +28,11 @@ async function timeGpu(device, bodies) {
 export async function calibrateGpu(device, { limit = GPU_RANGE[1], stepMs = GPU_STEP_MS } = {}) {
   // A small first probe says how fast the device is; the two fitted probes are then sized so
   // the larger takes a few milliseconds a step, whether this is a phone or a workstation.
+  // The fitted pair is sized so the larger probe costs about half the budget, which keeps the
+  // extrapolation to the final count short (noise in the probes grows fast with distance).
   const n0 = 8000;
   const t0 = await timeGpu(device, n0);
-  const n2 = Math.round(Math.min(64000, Math.max(16000, n0 * Math.sqrt(6 / Math.max(t0, 0.2)))) / 1000) * 1000;
+  const n2 = Math.round(Math.min(96000, Math.max(16000, n0 * Math.sqrt(0.5 * stepMs / Math.max(t0, 0.2)))) / 1000) * 1000;
   const n1 = n2 / 2;
   const [t1, t2] = [await timeGpu(device, n1), await timeGpu(device, n2)];
   const b = (t2 - t1) / (n2 * n2 - n1 * n1);

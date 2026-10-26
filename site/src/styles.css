@@ -11,9 +11,7 @@
 }
 
 html,
-body,
-#app {
-  height: 100%;
+body {
   margin: 0;
 }
 
@@ -22,7 +20,7 @@ body {
   color: var(--ink);
   font-family: var(--font);
   font-feature-settings: "ss01", "cv11";
-  overflow: hidden;
+  overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -76,21 +74,66 @@ body {
 }
 
 /* Simulation fills the viewport, under the header */
+/* The simulation is fixed behind everything; the first screen and the about section scroll over it. */
 .intro {
   position: relative;
-  height: 100%;
-  overflow: hidden;
+  height: 100vh;
+  height: 100dvh;
 }
 
 .nbody {
-  position: absolute;
+  position: fixed;
   inset: 0;
   width: 100%;
   height: 100%;
   display: block;
   background: var(--paper);
-  touch-action: none;
+  touch-action: pan-y;
   cursor: crosshair;
+}
+
+.about {
+  position: relative;
+  min-height: 100vh;
+  max-width: 62ch;
+  margin: 0 auto;
+  padding: 22vh 24px 34vh;
+  font-size: clamp(18px, 1.6vw, 22px);
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.about h2 {
+  margin: 0 0 1.2em;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.about p {
+  margin: 0 0 1.2em;
+}
+
+.about .links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  margin-top: 2em;
+  font-weight: 500;
+}
+
+.about a {
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 2px solid var(--ink);
+  padding-bottom: 1px;
+}
+
+.about a:hover,
+.about a:focus-visible {
+  color: var(--muted);
+  border-color: var(--muted);
 }
 
 

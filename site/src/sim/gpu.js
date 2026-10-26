@@ -8,7 +8,7 @@ const WG = 256;
 const MAX_CORES = 4;
 
 const SHADER = /* wgsl */ `
-struct Params { n: u32, k: u32, dt: f32, eps2: f32 }
+struct Params { n: u32, k: u32, dt: f32, eps2: f32, mutual: f32, gdown: f32, bottom: f32, bounce: f32, depth: f32 }
 struct Core { pos: vec2<f32>, m: f32, e2: f32 }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var<storage, read_write> body: array<vec4<f32>>;  // x, y, m, r
@@ -25,9 +25,16 @@ var<workgroup> red: array<vec2<f32>, ${WG}>;
 fn kickDrift(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= p.n) { return; }
-  let v = vel[i] + acc[i] * (0.5 * p.dt);
+  var v = vel[i] + acc[i] * (0.5 * p.dt);
+  var pos = body[i].xy + v * p.dt;
+  if (p.gdown > 0.0) {
+    // falling: settle into the bank at this star's own resting height (see bankOffset)
+    let u = f32((i + 1u) * 2654435761u) / 4294967296.0;
+    let fy = p.bottom - (0.3 + p.depth * u * u);
+    if (pos.y > fy) { pos.y = fy; v = vec2<f32>(v.x * 0.97, select(v.y, -v.y * p.bounce, v.y > 0.0)); }
+  }
   vel[i] = v;
-  body[i] = vec4<f32>(body[i].xy + v * p.dt, body[i].zw);
+  body[i] = vec4<f32>(pos, body[i].zw);
 }
 
 @compute @workgroup_size(${WG})
@@ -62,6 +69,7 @@ fn force(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocatio
     }
     workgroupBarrier();
   }
+  a = a * p.mutual;
   // cores: exact pull on this star, and this star's pull on each core (reduced per workgroup)
   for (var c = 0u; c < p.k; c++) {
     var contrib = vec2<f32>(0.0);
@@ -82,7 +90,7 @@ fn force(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocatio
     if (lid.x == 0u) { react[wid.x * ${MAX_CORES}u + c] = red[0]; }
     workgroupBarrier();
   }
-  if (i < n) { acc[i] = a; }
+  if (i < n) { acc[i] = a + vec2<f32>(0.0, p.gdown); }
 }
 
 @compute @workgroup_size(${WG})
@@ -125,7 +133,7 @@ export function createGpuEngine(device, sim) {
   const velBuf = device.createBuffer({ size: cap * 8, usage });
   const accBuf = device.createBuffer({ size: cap * 8, usage });
   const reactBuf = device.createBuffer({ size: groups * MAX_CORES * 8, usage });
-  const params = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const params = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const coresBuf = device.createBuffer({ size: MAX_CORES * 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const readBody = [0, 1].map(() => device.createBuffer({ size: cap * 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }));
   const readVel = [0, 1].map(() => device.createBuffer({ size: cap * 8, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }));
@@ -153,7 +161,7 @@ export function createGpuEngine(device, sim) {
   device.queue.writeBuffer(velBuf, 0, velocities);
   device.queue.writeBuffer(accBuf, 0, new Float32Array(cap * 2));
 
-  const paramData = new ArrayBuffer(16);
+  const paramData = new ArrayBuffer(48);
   const coreData = new Float32Array(MAX_CORES * 4);
   const reaction = new Float64Array(MAX_CORES * 2); // latest known star pull on each core
   let flip = 0;
@@ -161,19 +169,20 @@ export function createGpuEngine(device, sim) {
 
   const writeParams = () => {
     new Uint32Array(paramData, 0, 2).set([n, sim.k]);
-    new Float32Array(paramData, 8, 2).set([sim.o.dt, sim.o.softening ** 2]);
+    new Float32Array(paramData, 8, 7).set([sim.o.dt, sim.o.softening ** 2, 1 - sim.fall, sim.fall * sim.o.fallG, sim.halfH, sim.o.bounce, sim.o.bankDepth]);
     device.queue.writeBuffer(params, 0, paramData);
   };
   const writeCores = () => {
     coreData.fill(0);
-    for (let c = 0; c < sim.k; c++) { coreData[4 * c] = sim.cx[c]; coreData[4 * c + 1] = sim.cy[c]; coreData[4 * c + 2] = sim.cm[c]; coreData[4 * c + 3] = sim.ce2[c]; }
+    // a core's pull on the stars fades with a fall, except the pointer's hole
+    for (let c = 0; c < sim.k; c++) { coreData[4 * c] = sim.cx[c]; coreData[4 * c + 1] = sim.cy[c]; coreData[4 * c + 2] = sim.cm[c] * (c === sim.hole ? 1 : 1 - sim.fall); coreData[4 * c + 3] = sim.ce2[c]; }
     device.queue.writeBuffer(coresBuf, 0, coreData);
   };
 
   // Core accelerations: exact core-core terms plus the latest reduced star reaction.
   const coreAccel = () => {
     const { k, cx, cy, cax, cay, cm, ce2 } = sim;
-    for (let c = 0; c < k; c++) { cax[c] = reaction[2 * c] / cm[c]; cay[c] = reaction[2 * c + 1] / cm[c]; }
+    for (let c = 0; c < k; c++) { const w = c === sim.hole ? 1 : 1 - sim.fall; cax[c] = w * reaction[2 * c] / cm[c]; cay[c] = w * reaction[2 * c + 1] / cm[c]; }
     for (let a = 0; a < k; a++) {
       for (let b = a + 1; b < k; b++) {
         const dx = cx[b] - cx[a], dy = cy[b] - cy[a];

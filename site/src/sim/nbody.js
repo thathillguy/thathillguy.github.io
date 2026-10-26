@@ -19,6 +19,9 @@ export const DEFAULTS = {
   nebulaRadius: 42,      // where a nebula's disc is truncated, in sim units
   scaleLength: 12,       // exponential disc scale length: surface density falls as exp(-r / h)
   dispersion: 0.08,      // random radial / tangential velocity kick, as a fraction of circular speed
+  fallG: 160,            // the downward field when the page "falls" (sim units / s^2)
+  bounce: 0.35,          // restitution at the floor
+  bankDepth: 7,          // how thick the bank of fallen stars is (sim units)
   coreSoftening: 5,      // Plummer softening of the cores
   softening: 1,          // Plummer softening between stars
   separation: 110,       // starting distance between the two cores (their apoapsis)
@@ -41,6 +44,12 @@ const EMPTY = -1, INTERNAL = -2, CROWD = -3; // quadtree leaf states
 const MAX_DEPTH = 24;
 
 /** Schwarzschild radius of a mass m: 2 G m / c^2, with G = 1. */
+/** A star's resting height in the bank of fallen stars: a hash of its slot, denser at the bottom. */
+export function bankOffset(i, depth) {
+  const u = (Math.imul(i + 1, 2654435761) >>> 0) / 4294967296;
+  return 0.3 + depth * u * u;
+}
+
 export function schwarzschildRadius(m, c) {
   return (2 * m) / (c * c);
 }
@@ -78,6 +87,7 @@ export class NBody {
     this.cap = cap;
     for (const k of ['x', 'y', 'vx', 'vy', 'ax', 'ay', 'r', 'm']) this[k] = new Float64Array(cap);
     this.colour = new Uint8Array(cap);
+    this.floor = new Float32Array(cap); // each star's resting height in the bank, as an offset above the bottom edge
     this.home = new Uint8Array(cap);
     this._dead = new Uint8Array(cap);
     this._keys = new Float64Array(cap);
@@ -120,6 +130,9 @@ export class NBody {
       this.spin[c] = c === 0 ? 1 : -1; // one prograde, one retrograde: classic tidal tails
     }
     this.hole = null;
+    this.fall = 0;        // 0: gravity as usual; 1: a uniform downward field and a floor instead
+    this.fallen = false;
+    this.recovering = false;
   }
 
   // Random orbital velocities never sum to exactly zero: let each core absorb its disc's residual,
@@ -159,6 +172,16 @@ export class NBody {
   }
 
   /** Put the black hole at (x, y), creating it if needed. It is pinned: it pulls but does not move. */
+  /**
+   * How far the page has "fallen", 0..1: mutual gravity fades out as a uniform downward field
+   * and a floor fade in. Coming back from a fall, the banked stars are returned to the discs.
+   */
+  setFall(f) {
+    this.fall = Math.min(1, Math.max(0, f));
+    if (this.fall > 0.6) this.fallen = true;
+    if (this.fall < 0.25 && this.fallen) { this.fallen = false; this.recovering = true; }
+  }
+
   setHole(x, y) {
     if (this.hole == null) {
       const c = (this.hole = this.k++);
@@ -189,6 +212,7 @@ export class NBody {
     this.r[i] = radius;
     this.m[i] = (this.density ?? 1) * radius ** 3;
     this.colour[i] = colourIndex;
+    this.floor[i] = bankOffset(i, this.o.bankDepth);
     this.home[i] = home;
     return i;
   }
@@ -320,7 +344,7 @@ export class NBody {
     if (this.n < 2) return;
     this._buildTree();
     const { n, x, y, ax, ay, nx, ny, nh, nm, ncx, ncy, nleaf, nchild } = this;
-    const eps2 = this.o.softening ** 2, theta2 = this.o.theta ** 2;
+    const eps2 = this.o.softening ** 2, theta2 = this.o.theta ** 2, mu = 1 - this.fall;
     const stack = this._stack;
     for (let i = 0; i < n; i++) {
       const xi = x[i], yi = y[i];
@@ -353,8 +377,8 @@ export class NBody {
           }
         }
       }
-      ax[i] += axi;
-      ay[i] += ayi;
+      ax[i] += axi * mu;
+      ay[i] += ayi * mu;
     }
   }
 
@@ -371,13 +395,15 @@ export class NBody {
         cax[b] -= inv * cm[a] * dx; cay[b] -= inv * cm[a] * dy;
       }
     }
+    const mu = 1 - this.fall;
     for (let i = 0; i < n; i++) {
       let axi = 0, ayi = 0;
       const xi = x[i], yi = y[i], mi = m[i];
       for (let c = 0; c < k; c++) {
+        const w = c === this.hole ? 1 : mu; // the pointer's hole keeps its pull through a fall
         const dx = cx[c] - xi, dy = cy[c] - yi;
         const q = dx * dx + dy * dy + ce2[c];
-        const inv = 1 / (q * Math.sqrt(q));
+        const inv = w / (q * Math.sqrt(q));
         axi += inv * cm[c] * dx; ayi += inv * cm[c] * dy;
         cax[c] -= inv * mi * dx; cay[c] -= inv * mi * dy;
       }
@@ -420,13 +446,32 @@ export class NBody {
       vx[i] += ax[i] * h; vy[i] += ay[i] * h;
       x[i] += vx[i] * dt; y[i] += vy[i] * dt;
     }
+    if (this.fall > 0) this._floor();
     this.driftCores(dt);
     this._accelerate();
+    if (this.fall > 0) {
+      const g = this.fall * this.o.fallG;
+      for (let i = 0; i < this.n; i++) ay[i] += g;
+    }
     for (let i = 0; i < this.n; i++) { vx[i] += ax[i] * h; vy[i] += ay[i] * h; }
     this.kickCores(h);
     this.cull();
     this.time += dt;
     this.stats.steps++;
+  }
+
+  /** During a fall, stars that reach their resting height in the bank bounce and settle. */
+  _floor() {
+    const { n, y, vx, vy, floor } = this;
+    const bottom = this.halfH, bounce = this.o.bounce;
+    for (let i = 0; i < n; i++) {
+      const fy = bottom - floor[i];
+      if (y[i] > fy) {
+        y[i] = fy;
+        if (vy[i] > 0) vy[i] = -vy[i] * bounce;
+        vx[i] *= 0.97;
+      }
+    }
   }
 
   /** Cores: half-kick with the current accelerations, then drift. */
@@ -474,13 +519,25 @@ export class NBody {
         if (!dead[i] && dx * dx + dy * dy < rr) { dead[i] = 1; this.stats.swallowed++; changed++; }
       }
     }
+    if (this.recovering) {
+      // after a fall: a few percent of the banked stars per step go back into the discs
+      const band = this.halfH - this.o.bankDepth - 1;
+      let quota = Math.ceil(0.04 * n), found = 0;
+      for (let i = 0; i < n; i++) {
+        if (dead[i] || y[i] < band) continue;
+        found++;
+        if (quota > 0) { dead[i] = 2; quota--; changed++; }
+      }
+      if (!found) this.recovering = false;
+    }
     if (!changed) return null;
     const rewritten = [];
     for (let i = 0; i < n; i++) {
       if (!dead[i]) continue;
+      const rim = dead[i] === 1;
       dead[i] = 0;
       this.n = i;                       // respawn writes into slot i
-      this._spawn(this.home[i], true);
+      this._spawn(this.home[i], rim);
       rewritten.push(i);
     }
     this.n = n;
