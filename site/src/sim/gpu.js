@@ -4,6 +4,8 @@
 //
 // Body layout, shared with the renderer: vec4 (x, y, mass, radius) per star.
 
+import { HULL_MARGIN } from './fluid.js';
+
 const WG = 256;
 const MAX_CORES = 4;
 
@@ -116,7 +118,9 @@ struct FParams {
   K: f32, cohesion: f32, visc: f32, g: f32,
   strength: f32, dtf: f32, halfW: f32, halfH: f32,
   bounce: f32, hx: f32, hy: f32, hm: f32,
-  he2: f32, useAcc: f32,
+  he2: f32, useAcc: f32, bx: f32, by: f32,
+  bc: f32, bs: f32, bhw: f32, bhh: f32,
+  bvx: f32, bvy: f32, hasBoat: f32, pad1: f32,
 }
 @group(0) @binding(0) var<uniform> q: FParams;
 @group(0) @binding(1) var<storage, read_write> body: array<vec4<f32>>;
@@ -230,6 +234,21 @@ fn fluid(@builtin(global_invocation_id) gid: vec3<u32>) {
   if (np.x < left) { np.x = left; if (v.x < 0.0) { v.x = -v.x * q.bounce; } }
   else if (np.x > right) { np.x = right; if (v.x > 0.0) { v.x = -v.x * q.bounce; } }
   if (np.y > floor) { np.y = floor; if (v.y > 0.0) { v.y = -v.y * q.bounce; } }
+  if (q.hasBoat > 0.5) {
+    // inside the hull? push out through the nearest face, taking the hull's velocity
+    let d = np - vec2<f32>(q.bx, q.by);
+    let l = vec2<f32>(q.bc * d.x + q.bs * d.y, -q.bs * d.x + q.bc * d.y);
+    let e = vec2<f32>(q.bhw, q.bhh);
+    if (abs(l.x) < e.x && abs(l.y) < e.y) {
+      let o = e - abs(l);
+      var nl = vec2<f32>(0.0, select(-1.0, 1.0, l.y >= 0.0));
+      if (o.x < o.y) { nl = vec2<f32>(select(-1.0, 1.0, l.x >= 0.0), 0.0); }
+      let wn = vec2<f32>(q.bc * nl.x - q.bs * nl.y, q.bs * nl.x + q.bc * nl.y);
+      np += wn * min(o.x, o.y);
+      let rel = dot(v - vec2<f32>(q.bvx, q.bvy), wn);
+      if (rel < 0.0) { v -= wn * (rel * (1.0 + q.bounce)); }
+    }
+  }
   vel[i] = v;
   body[i] = vec4<f32>(np, body[i].zw);
 }`;
@@ -283,7 +302,7 @@ export function createGpuEngine(device, sim) {
   const densBuf = device.createBuffer({ size: maxCells * 4, usage });
   const tmpBuf = device.createBuffer({ size: maxCells * 4, usage });
   const presBuf = device.createBuffer({ size: maxCells * 4, usage });
-  const fparams = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const fparams = device.createBuffer({ size: 144, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const params = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const coresBuf = device.createBuffer({ size: MAX_CORES * 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const readBody = [0, 1].map(() => device.createBuffer({ size: cap * 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }));
@@ -335,13 +354,14 @@ export function createGpuEngine(device, sim) {
     new Float32Array(paramData, 8, 4).set([sim.o.dt, sim.o.softening ** 2, 1 - sim.fall, rewindS]);
     device.queue.writeBuffer(params, 0, paramData);
   };
-  const fdata = new ArrayBuffer(96);
+  const fdata = new ArrayBuffer(144);
   const writeFluidParams = (useAcc) => {
-    const f = sim.fluid, o = f.o, hole = sim.hole;
+    const f = sim.fluid, o = f.o, hole = sim.hole, b = sim.boat;
     new Uint32Array(fdata, 0, 4).set([n, f.cols, f.rows, f.cols * f.rows]);
-    new Float32Array(fdata, 16, 18).set([
+    new Float32Array(fdata, 16, 28).set([
       f.h, f.ox, f.oy, f.rho0, o.K, o.cohesion, o.visc, o.g, sim.fall, sim.o.dt / o.substeps, sim.halfW, sim.halfH, o.bounce,
       hole == null ? 0 : sim.cx[hole], hole == null ? 0 : sim.cy[hole], hole == null ? 0 : sim.cm[hole], hole == null ? 1 : sim.ce2[hole], useAcc ? 1 : 0,
+      b ? b.x : 0, b ? b.y : 0, b ? b.c : 1, b ? b.s : 0, b ? b.hw + HULL_MARGIN : 0, b ? b.hh + HULL_MARGIN : 0, b ? b.vx : 0, b ? b.vy : 0, b ? 1 : 0, 0,
     ]);
     device.queue.writeBuffer(fparams, 0, fdata);
   };

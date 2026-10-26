@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { NBody, circularSpeed } from './nbody.js';
+import { Boat } from './boat.js';
 
 // Deterministic stand-in for Math.random (Park-Miller).
 function seeded(seed = 42) {
@@ -146,4 +147,33 @@ test('a fall pools the stars as a fluid filling about 60% of the height, and com
   assert.ok(Math.abs(sim.energy() - before.e) < 1e-9 * Math.abs(before.e), 'energy is what it was');
   for (let k = 0; k < 30; k++) sim.step();
   assert.equal(sim.count, 8000);
+});
+
+test('the about card floats: it settles with roughly its density fraction submerged, level, and the stars stay out of it', () => {
+  const sim = new NBody({ bodies: 12800, random: seeded(9), halfW: 32, halfH: 14, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
+  sim.setFall(1);
+  for (let k = 0; k < 60 * 4; k++) sim.step();
+  const boat = new Boat({ sigma: 0.4 });
+  boat.hw = 6; boat.hh = 2.5;
+  boat.pin(0, -8); boat.active = true;
+  const positions = new Float32Array(sim.cap * 4), velocities = new Float32Array(sim.cap * 2);
+  const pack = () => { for (let i = 0; i < sim.n; i++) { positions[4 * i] = sim.x[i]; positions[4 * i + 1] = sim.y[i]; velocities[2 * i] = sim.vx[i]; velocities[2 * i + 1] = sim.vy[i]; } };
+  const g = sim.fluid.o.g;
+  for (let k = 0; k < 60 * 8; k++) {
+    sim.boat = boat.hull;
+    sim.step();
+    pack();
+    boat.step(sim.o.dt, positions, velocities, sim.n, sim.halfW, sim.halfH, g);
+  }
+  const [yl, yr] = boat.surface;
+  const surface = (yl + yr) / 2;
+  const submerged = (boat.y + boat.hh - surface) / (2 * boat.hh);
+  // the pool is still sloshing from the splash, so this is a floating check, not a still one
+  assert.ok(submerged > 0.15 && submerged < 0.75, `submerged fraction ${submerged.toFixed(2)}`);
+  assert.ok(Math.abs(boat.th) < 0.4, `tilt ${boat.th.toFixed(3)}`);
+  assert.ok(Math.abs(boat.vy) < 8, `bobbing, vy ${boat.vy.toFixed(2)}`);
+  assert.ok(boat.y + boat.hh < sim.halfH - 1, 'not resting on the floor');
+  let inside = 0;
+  for (let i = 0; i < sim.n; i++) if (Math.abs(sim.x[i] - boat.x) < boat.hw && Math.abs(sim.y[i] - boat.y) < boat.hh) inside++;
+  assert.equal(inside, 0, 'no star inside the hull');
 });

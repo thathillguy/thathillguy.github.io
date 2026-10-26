@@ -10,17 +10,20 @@ const GPU = query.get('gpu') !== '0';
 
 export default function App() {
   const hero = useRef(null);
+  const boat = useRef(null);
   return (
     <>
       <HeaderBar />
       <main className="intro">
-        <NBodyCanvas stars={STARS} gpu={GPU} warpTarget={hero} />
+        <NBodyCanvas stars={STARS} gpu={GPU} warpTarget={hero} boatTarget={boat} />
         <div ref={hero} className="hero">
           <h1>Robert Hill</h1>
           <Typewriter />
         </div>
       </main>
       <section className="about" id="about">
+        <div className="boat-slot">
+        <div ref={boat} className="boat">
         <h2>About</h2>
         <p>
           I'm Robert, a software engineer at [company] in [city], where I [what you do, in one
@@ -37,6 +40,8 @@ export default function App() {
           <a href="https://github.com/thathillguy" rel="me noopener">GitHub</a>
           <a href="https://www.linkedin.com/in/robert-hill-470068a8/" rel="me noopener">LinkedIn</a>
         </p>
+        </div>
+        </div>
       </section>
     </>
   );

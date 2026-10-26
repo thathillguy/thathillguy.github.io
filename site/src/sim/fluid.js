@@ -4,6 +4,8 @@
 // viewport. Weakly compressible, so the pool wobbles; cheap enough for a hundred thousand stars.
 // The GPU engine runs the same scheme in compute shaders (see gpu.js).
 
+export const HULL_MARGIN = 0.6; // stars keep this far from the boat's edges
+
 export const FLUID = {
   cell: 1.2,        // grid spacing (sim units)
   K: 30000,         // stiffness: acceleration = -K grad(rho / rho0); the wave speed is sqrt(K)
@@ -78,6 +80,7 @@ export class Fluid {
    */
   substep(sim, n, dtf, strength) {
     const { cols, rows, h, ox, oy, rho0, count, mx, my, pres } = this;
+    const hull = sim.boat;
     const { K, cohesion, visc, g, bounce } = this.o;
     const { x, y, vx, vy, ax, ay } = sim;
     const inv = 1 / h;
@@ -126,6 +129,22 @@ export class Fluid {
       if (px < left) { px = left; if (u < 0) u = -u * bounce; }
       else if (px > right) { px = right; if (u > 0) u = -u * bounce; }
       if (py > floor) { py = floor; if (v > 0) v = -v * bounce; }
+      if (hull) {
+        // inside the hull? push out through the nearest face, taking the hull's velocity
+        const dx = px - hull.x, dy = py - hull.y;
+        const lx = hull.c * dx + hull.s * dy, ly = -hull.s * dx + hull.c * dy;
+        const ex = hull.hw + HULL_MARGIN, ey = hull.hh + HULL_MARGIN;
+        if (Math.abs(lx) < ex && Math.abs(ly) < ey) {
+          const ox = ex - Math.abs(lx), oy = ey - Math.abs(ly);
+          let nx, ny; // outward normal in the hull frame
+          if (ox < oy) { nx = Math.sign(lx) || 1; ny = 0; } else { nx = 0; ny = Math.sign(ly) || 1; }
+          const wnx = hull.c * nx - hull.s * ny, wny = hull.s * nx + hull.c * ny;
+          const push = Math.min(ox, oy);
+          px += wnx * push; py += wny * push;
+          const rel = (u - hull.vx) * wnx + (v - hull.vy) * wny;
+          if (rel < 0) { u -= rel * wnx * (1 + bounce); v -= rel * wny * (1 + bounce); }
+        }
+      }
       x[i] = px; y[i] = py; vx[i] = u; vy[i] = v;
     }
   }

@@ -127,6 +127,7 @@ export class NBody {
     this.hole = null;
     this.fall = 0;        // 0: gravity as usual; 1: the stars are a fluid pooled at the bottom of the view
     this.fluid = new Fluid();
+    this.boat = null;     // the about card's hull while the page is fallen: { x, y, c, s, hw, hh, vx, vy }
     this.fallen = false;
     this.snap = null;     // the state the moment a fall began: x, y, vx, vy, and the nebula cores
     this.rewind = null;   // { step, total } while the stars are being carried back to the snapshot

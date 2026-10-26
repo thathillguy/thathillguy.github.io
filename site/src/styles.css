@@ -92,17 +92,30 @@ body {
   cursor: crosshair;
 }
 
-/* The about copy sits in the top 40% of the second screen; the fluid fills the 60% below it. */
+/* The about card is laid out in the top 40% of the second screen and floats as a boat once
+   the fluid fills the 60% below it (NBodyCanvas moves `.boat`; `.boat-slot` keeps its place). */
 .about {
   position: relative;
   min-height: 100vh;
   min-height: 100dvh;
-  max-width: 60ch;
-  margin: 0 auto;
+  display: flex;
+  justify-content: center;
   padding: calc(56px + 4vh) 24px 60vh;
+}
+
+.boat-slot {
+  width: min(60ch, 100%);
+}
+
+.boat {
+  padding: 24px 28px;
+  background: var(--paper);
+  border: 2px solid var(--ink);
   font-size: clamp(16px, 1.3vw, 18px);
   line-height: 1.45;
   color: var(--ink);
+  transform-origin: 50% 50%;
+  will-change: transform;
 }
 
 .about h2 {
