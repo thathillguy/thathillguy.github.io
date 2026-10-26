@@ -17,12 +17,9 @@ const BOAT_RELEASE = 0.1;   // the about card lets go as soon as the fall is und
 
 /**
  * The simulation canvas. Sizes itself to the device at startup (see calibrate.js) unless `stars`
- * is given. `warpTarget` is an element (the name card) to bend along with the field. `onReady`
- * is told the star count and the path (GPU or CPU) once the stars exist.
+ * is given. `warpTarget` is an element (the name card) to bend along with the field.
  */
-export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, boatTarget = null, onReady = null }) {
-  const onReadyRef = useRef(onReady); // read through a ref so a new callback never rebuilds the sim
-  onReadyRef.current = onReady;
+export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, boatTarget = null }) {
   const canvasRef = useRef(null);
 
   useEffect(() => {
@@ -58,7 +55,6 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
       if (device) { engine = createGpuEngine(device, sim); driver.useGpu(engine); }
       driver.probe = probe;
       window.__nbody = driver; // handy in the console
-      onReadyRef.current?.({ bodies, gpu: !!device });
     });
 
     const einsteinRadius = () => Math.sqrt(2 * (sim?.holeRadius ?? 1.4) * LENS_DISTANCE) * pxPerUnit; // CSS px

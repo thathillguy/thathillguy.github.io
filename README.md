@@ -30,8 +30,8 @@ horizon is drawn; the hole shows only through what it does to the field and the 
 `?gpu=0` forces the CPU path and `?stars=N` pins the star count. When benchmarking, keep the
 browser window in front; macOS slows a background app's threads several-fold.
 
-The about card's copy is in `site/src/App.jsx`; it quotes the star count the calibration chose.
-The resume it links is `site/public/resume.pdf`, served at `/resume.pdf`.
+The about card's copy is in `site/src/App.jsx`. The resume it links is `site/public/resume.pdf`,
+served at `/resume.pdf`.
 
 ## Develop
 

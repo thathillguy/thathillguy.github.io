@@ -109,17 +109,17 @@ body {
 }
 
 .boat-slot {
-  width: min(1040px, 100%);
+  width: min(820px, 100%);
   align-self: flex-start; /* the slot must be exactly the card's size: the water reads the hull from it */
 }
 
-/* A ship in profile (HULL_SHAPE in fluid.js draws the same outline for the water): the text is
-   laid out in two columns on deck, and the empty lower hull rides in the water. The bow juts out
-   on the right, so the deck keeps more room on that side. */
+/* A ship in profile (HULL_SHAPE in fluid.js draws the same outline for the water): a few lines
+   on deck, and the empty lower hull rides in the water. The bow juts out on the right, so the
+   deck keeps more room on that side. */
 .boat {
   position: relative;
-  padding: 22px 13% 34px 7%;
-  font-size: clamp(15px, 1.15vw, 17px);
+  padding: 24px 16% 40px 7%;
+  font-size: clamp(17px, 1.5vw, 22px);
   line-height: 1.45;
   color: var(--ink);
   transform-origin: 50% 50%;
@@ -127,15 +127,7 @@ body {
 }
 
 .boat .deck {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0 36px;
-}
-
-@media (max-width: 720px) {
-  .boat .deck {
-    grid-template-columns: 1fr;
-  }
+  max-width: 30em;
 }
 
 .boat .hull {
