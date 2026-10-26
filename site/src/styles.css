@@ -97,12 +97,14 @@ body {
 /* Black hole readout, next to the pointer while holding */
 /* Name card. Drawn in white and blended with "difference": black over the white field, white
    over anything dark, so it stays legible wherever the simulation goes. */
+/* Centred in the space below the top bar. The h1's line box is trimmed to its cap height so the
+   block centres on the ink, and a little right padding offsets the R's left side bearing. */
 .hero {
   position: absolute;
-  top: 50%;
+  top: calc(50% + 28px);
   left: 0;
   width: 100%;
-  transform: translateY(-54%);
+  transform: translateY(-50%);
   padding: 0 24px;
   text-align: center;
   pointer-events: none;
@@ -112,15 +114,16 @@ body {
 
 .hero h1 {
   margin: 0;
+  padding-right: 0.06em;
   font-size: clamp(56px, 13.5vw, 190px);
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: -0.035em;
-  line-height: 0.9;
+  line-height: 0.74;
 }
 
 .tagline {
-  margin: 18px 0 0;
+  margin: 0.7em 0 0;
   font-size: clamp(20px, 3.4vw, 34px);
   font-weight: 500;
   letter-spacing: -0.01em;
