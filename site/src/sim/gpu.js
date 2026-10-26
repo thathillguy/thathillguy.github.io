@@ -131,7 +131,10 @@ struct FParams {
 @group(1) @binding(2) var<storage, read_write> tmp: array<f32>;
 @group(1) @binding(3) var<storage, read_write> pres: array<f32>;
 
-const FP: f32 = 256.0;
+// fixed point for the grid sums. Rounded, not truncated: truncation loses more of the small
+// weights than of the momentum they carry, which inflates the cell mean velocity, and relaxing
+// toward an inflated mean pumps energy into the pool a little every substep.
+const FP: f32 = 1024.0;
 
 fn count(c: u32) -> f32 { return f32(atomicLoad(&grid[3u * c])) / FP; }
 
@@ -157,9 +160,9 @@ fn splat(@builtin(global_invocation_id) gid: vec3<u32>) {
   let cs = vec4<u32>(c, c + 1u, c + q.cols, c + q.cols + 1u);
   for (var k = 0u; k < 4u; k++) {
     let cc = cs[k]; let wk = w[k] * FP;
-    atomicAdd(&grid[3u * cc], i32(wk));
-    atomicAdd(&grid[3u * cc + 1u], i32(wk * v.x));
-    atomicAdd(&grid[3u * cc + 2u], i32(wk * v.y));
+    atomicAdd(&grid[3u * cc], i32(round(wk)));
+    atomicAdd(&grid[3u * cc + 1u], i32(round(wk * v.x)));
+    atomicAdd(&grid[3u * cc + 2u], i32(round(wk * v.y)));
   }
 }
 

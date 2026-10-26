@@ -10,7 +10,7 @@ export const FLUID = {
   cell: 1.2,        // grid spacing (sim units)
   K: 30000,         // stiffness: acceleration = -K grad(rho / rho0); the wave speed is sqrt(K)
   cohesion: 0,      // how far below rest density the pressure may go negative
-  visc: 0.08,       // velocity relaxed toward the cell mean by this fraction per substep
+  visc: 0.25,       // velocity relaxed toward the cell mean by this fraction per substep
   g: 100,           // downward field (sim units / s^2)
   bounce: 0.2,      // restitution at the walls and floor
   substeps: 8,      // per simulation step: sqrt(K) * dt / substeps must stay under `cell`
