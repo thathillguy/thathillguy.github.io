@@ -116,28 +116,34 @@ test('a black hole under the pointer pulls stars in, swallows them, and can be r
   assert.equal(sim.count, 2000);
 });
 
-test('a fall banks every star at the bottom edge, and coming back rewinds the same stars exactly', () => {
-  const sim = new NBody({ bodies: 1500, random: seeded(5) });
+test('a fall pools the stars as a fluid filling about 60% of the height, and coming back rewinds the same stars exactly', () => {
+  const sim = new NBody({ bodies: 8000, random: seeded(5), halfW: 20, halfH: 14, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
   for (let k = 0; k < 60; k++) sim.step();
   const before = { x: sim.x.slice(0, sim.n), y: sim.y.slice(0, sim.n), vx: sim.vx.slice(0, sim.n), e: sim.energy() };
   sim.setFall(1);
-  for (let k = 0; k < 120 * 6; k++) sim.step();
-  const bottom = sim.halfH, depth = sim.o.bankDepth + 0.5;
-  let banked = 0;
-  for (let i = 0; i < sim.n; i++) if (sim.y[i] > bottom - depth && sim.y[i] <= bottom) banked++;
-  assert.ok(banked > 0.97 * sim.n, `${banked} of ${sim.n} in the bank`);
-  assert.equal(sim.count, 1500);
+  for (let k = 0; k < 60 * 8; k++) sim.step();
+  // every star inside the walls, and the pool's surface near 60% of the height
+  let inside = 0;
+  const ys = [];
+  for (let i = 0; i < sim.n; i++) {
+    if (Math.abs(sim.x[i]) <= sim.halfW && sim.y[i] <= sim.halfH) inside++;
+    ys.push(sim.y[i]);
+  }
+  assert.equal(inside, sim.n, 'all stars inside the pool walls');
+  ys.sort((a, b) => a - b);
+  const surface = ys[Math.floor(0.05 * ys.length)]; // the top 5% is spray
+  const depth = (sim.halfH - surface) / (2 * sim.halfH);
+  assert.ok(depth > 0.5 && depth < 0.72, `pool depth ${depth.toFixed(2)} of the height`);
+  assert.equal(sim.count, 8000);
   sim.setFall(0);
   assert.ok(sim.rewind, 'a rewind starts');
   const total = sim.rewind.total;
-  sim.step();
-  assert.ok(sim.y[0] < bottom - depth || sim.y[0] > before.y[0], 'stars are on their way back');
-  for (let k = 1; k < total; k++) sim.step();
+  for (let k = 0; k < total; k++) sim.step();
   assert.equal(sim.rewind, null, 'the rewind finishes');
   assert.deepEqual(sim.x.slice(0, sim.n), before.x);
   assert.deepEqual(sim.y.slice(0, sim.n), before.y);
   assert.deepEqual(sim.vx.slice(0, sim.n), before.vx);
   assert.ok(Math.abs(sim.energy() - before.e) < 1e-9 * Math.abs(before.e), 'energy is what it was');
   for (let k = 0; k < 30; k++) sim.step();
-  assert.equal(sim.count, 1500);
+  assert.equal(sim.count, 8000);
 });

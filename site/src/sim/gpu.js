@@ -8,7 +8,7 @@ const WG = 256;
 const MAX_CORES = 4;
 
 const SHADER = /* wgsl */ `
-struct Params { n: u32, k: u32, dt: f32, eps2: f32, mutual: f32, gdown: f32, bottom: f32, bounce: f32, depth: f32, rewind: f32 }
+struct Params { n: u32, k: u32, dt: f32, eps2: f32, mutual: f32, rewind: f32 }
 struct Core { pos: vec2<f32>, m: f32, e2: f32 }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var<storage, read_write> body: array<vec4<f32>>;  // x, y, m, r
@@ -28,16 +28,9 @@ var<workgroup> red: array<vec2<f32>, ${WG}>;
 fn kickDrift(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= p.n) { return; }
-  var v = vel[i] + acc[i] * (0.5 * p.dt);
-  var pos = body[i].xy + v * p.dt;
-  if (p.gdown > 0.0) {
-    // falling: settle into the bank at this star's own resting height (see bankOffset)
-    let u = f32((i + 1u) * 2654435761u) / 4294967296.0;
-    let fy = p.bottom - (0.3 + p.depth * u * u);
-    if (pos.y > fy) { pos.y = fy; v = vec2<f32>(v.x * 0.97, select(v.y, -v.y * p.bounce, v.y > 0.0)); }
-  }
+  let v = vel[i] + acc[i] * (0.5 * p.dt);
   vel[i] = v;
-  body[i] = vec4<f32>(pos, body[i].zw);
+  body[i] = vec4<f32>(body[i].xy + v * p.dt, body[i].zw);
 }
 
 @compute @workgroup_size(${WG})
@@ -93,7 +86,7 @@ fn force(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocatio
     if (lid.x == 0u) { react[wid.x * ${MAX_CORES}u + c] = red[0]; }
     workgroupBarrier();
   }
-  if (i < n) { acc[i] = a + vec2<f32>(0.0, p.gdown); }
+  if (i < n) { acc[i] = a; }
 }
 
 @compute @workgroup_size(${WG})
@@ -111,6 +104,134 @@ fn rewind(@builtin(global_invocation_id) gid: vec3<u32>) {
   if (p.rewind >= 1.0) { body[i] = snapBody[i]; vel[i] = snapVel[i]; return; }
   body[i] = vec4<f32>(mix(startBody[i].xy, snapBody[i].xy, p.rewind), body[i].zw);
   vel[i] = vec2<f32>(0.0);
+}`;
+
+// The fluid of fluid.js, on the GPU: deposit onto a grid with atomics, fold the margins, blur,
+// pressure, then move each star. Its own module and bind groups, since a pipeline may only see
+// eight storage buffers and the gravity kernels already use most of them.
+const FLUID_SHADER = /* wgsl */ `
+struct FParams {
+  n: u32, cols: u32, rows: u32, cells: u32,
+  h: f32, ox: f32, oy: f32, rho0: f32,
+  K: f32, cohesion: f32, visc: f32, g: f32,
+  strength: f32, dtf: f32, halfW: f32, halfH: f32,
+  bounce: f32, hx: f32, hy: f32, hm: f32,
+  he2: f32, useAcc: f32,
+}
+@group(0) @binding(0) var<uniform> q: FParams;
+@group(0) @binding(1) var<storage, read_write> body: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read_write> vel: array<vec2<f32>>;
+@group(0) @binding(3) var<storage, read_write> acc: array<vec2<f32>>;
+@group(1) @binding(0) var<storage, read_write> grid: array<atomic<i32>>; // per cell: count, mx, my, fixed point x256
+@group(1) @binding(1) var<storage, read_write> dens: array<f32>;
+@group(1) @binding(2) var<storage, read_write> tmp: array<f32>;
+@group(1) @binding(3) var<storage, read_write> pres: array<f32>;
+
+const FP: f32 = 256.0;
+
+fn count(c: u32) -> f32 { return f32(atomicLoad(&grid[3u * c])) / FP; }
+
+@compute @workgroup_size(${WG})
+fn gridClear(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let c = gid.x;
+  if (c >= q.cells) { return; }
+  atomicStore(&grid[3u * c], 0); atomicStore(&grid[3u * c + 1u], 0); atomicStore(&grid[3u * c + 2u], 0);
+}
+
+@compute @workgroup_size(${WG})
+fn splat(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= q.n) { return; }
+  let pos = body[i].xy;
+  let f = (pos - vec2<f32>(q.ox, q.oy)) / q.h - 0.5;
+  let cx = u32(clamp(floor(f.x), 0.0, f32(q.cols - 2u)));
+  let cy = u32(clamp(floor(f.y), 0.0, f32(q.rows - 2u)));
+  let t = clamp(f - vec2<f32>(f32(cx), f32(cy)), vec2<f32>(0.0), vec2<f32>(1.0));
+  let c = cy * q.cols + cx;
+  let v = vel[i];
+  let w = vec4<f32>((1.0 - t.x) * (1.0 - t.y), t.x * (1.0 - t.y), (1.0 - t.x) * t.y, t.x * t.y);
+  let cs = vec4<u32>(c, c + 1u, c + q.cols, c + q.cols + 1u);
+  for (var k = 0u; k < 4u; k++) {
+    let cc = cs[k]; let wk = w[k] * FP;
+    atomicAdd(&grid[3u * cc], i32(wk));
+    atomicAdd(&grid[3u * cc + 1u], i32(wk * v.x));
+    atomicAdd(&grid[3u * cc + 2u], i32(wk * v.y));
+  }
+}
+
+// margins lie beyond the walls: fold them onto the edge cells and zero them
+@compute @workgroup_size(${WG})
+fn fold(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let c = gid.x;
+  if (c >= q.cells) { return; }
+  let cx = c % q.cols; let cy = c / q.cols;
+  if (cx == 0u || cx == q.cols - 1u || cy == 0u || cy == q.rows - 1u) { dens[c] = 0.0; return; }
+  var d = count(c);
+  let l = cx == 1u; let r = cx == q.cols - 2u; let tp = cy == 1u; let b = cy == q.rows - 2u;
+  if (l) { d += count(c - 1u); } if (r) { d += count(c + 1u); }
+  if (tp) { d += count(c - q.cols); } if (b) { d += count(c + q.cols); }
+  if (l && tp) { d += count(c - q.cols - 1u); } if (r && tp) { d += count(c - q.cols + 1u); }
+  if (l && b) { d += count(c + q.cols - 1u); } if (r && b) { d += count(c + q.cols + 1u); }
+  dens[c] = d;
+}
+
+@compute @workgroup_size(${WG})
+fn blurX(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let c = gid.x;
+  if (c >= q.cells) { return; }
+  let cx = i32(c % q.cols); let o = c - u32(cx);
+  let lo = 1; let hi = i32(q.cols) - 2;
+  tmp[c] = (dens[o + u32(clamp(cx - 2, lo, hi))] + 4.0 * dens[o + u32(clamp(cx - 1, lo, hi))] + 6.0 * dens[o + u32(clamp(cx, lo, hi))]
+          + 4.0 * dens[o + u32(clamp(cx + 1, lo, hi))] + dens[o + u32(clamp(cx + 2, lo, hi))]) / 16.0;
+}
+
+@compute @workgroup_size(${WG})
+fn blurY(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let c = gid.x;
+  if (c >= q.cells) { return; }
+  let cx = c % q.cols; let cy = i32(c / q.cols);
+  let lo = 1; let hi = i32(q.rows) - 2;
+  let sm = (tmp[u32(clamp(cy - 2, lo, hi)) * q.cols + cx] + 4.0 * tmp[u32(clamp(cy - 1, lo, hi)) * q.cols + cx] + 6.0 * tmp[u32(clamp(cy, lo, hi)) * q.cols + cx]
+          + 4.0 * tmp[u32(clamp(cy + 1, lo, hi)) * q.cols + cx] + tmp[u32(clamp(cy + 2, lo, hi)) * q.cols + cx]) / 16.0;
+  pres[c] = q.K * max(sm / q.rho0 - 1.0, -q.cohesion);
+}
+
+@compute @workgroup_size(${WG})
+fn fluid(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= q.n) { return; }
+  let pos = body[i].xy;
+  let f = (pos - vec2<f32>(q.ox, q.oy)) / q.h - 0.5;
+  let cx = u32(clamp(floor(f.x), 1.0, f32(q.cols - 3u)));
+  let cy = u32(clamp(floor(f.y), 1.0, f32(q.rows - 3u)));
+  let t = clamp(f - vec2<f32>(f32(cx), f32(cy)), vec2<f32>(0.0), vec2<f32>(1.0));
+  let c = cy * q.cols + cx;
+  let w = vec4<f32>((1.0 - t.x) * (1.0 - t.y), t.x * (1.0 - t.y), (1.0 - t.x) * t.y, t.x * t.y);
+  let cs = vec4<u32>(c, c + 1u, c + q.cols, c + q.cols + 1u);
+  var gr = vec2<f32>(0.0); var cnt = 0.0; var su = vec2<f32>(0.0);
+  for (var k = 0u; k < 4u; k++) {
+    let cc = cs[k]; let wk = w[k];
+    gr += wk * vec2<f32>(pres[cc + 1u] - pres[cc - 1u], pres[cc + q.cols] - pres[cc - q.cols]);
+    cnt += wk * f32(atomicLoad(&grid[3u * cc]));
+    su += wk * vec2<f32>(f32(atomicLoad(&grid[3u * cc + 1u])), f32(atomicLoad(&grid[3u * cc + 2u])));
+  }
+  var v = vel[i];
+  let ps = q.strength * q.strength; // pressure and viscosity arrive after gravity (see fluid.js)
+  if (cnt > 1e-3) { v += q.visc * ps * (su / cnt - v); }
+  var a = vec2<f32>(0.0, q.g * q.strength) - gr * (ps * 0.5 / q.h);
+  if (q.useAcc > 0.5) { a += acc[i]; }
+  else if (q.hm > 0.0) {
+    let d = vec2<f32>(q.hx, q.hy) - pos; let qq = dot(d, d) + q.he2; let s = inverseSqrt(qq);
+    a += d * (q.hm * s * s * s);
+  }
+  v += a * q.dtf;
+  var np = pos + v * q.dtf;
+  let left = -q.halfW + 0.3; let right = q.halfW - 0.3; let floor = q.halfH - 0.3;
+  if (np.x < left) { np.x = left; if (v.x < 0.0) { v.x = -v.x * q.bounce; } }
+  else if (np.x > right) { np.x = right; if (v.x > 0.0) { v.x = -v.x * q.bounce; } }
+  if (np.y > floor) { np.y = floor; if (v.y > 0.0) { v.y = -v.y * q.bounce; } }
+  vel[i] = v;
+  body[i] = vec4<f32>(np, body[i].zw);
 }`;
 
 /** A WebGPU device, or null where there is none. Cheap enough to decide the star count on. */
@@ -139,6 +260,13 @@ export function createGpuEngine(device, sim) {
   for (const name of ['kickDrift', 'force', 'kick', 'rewind']) {
     pipelines[name] = device.createComputePipeline({ layout, compute: { module, entryPoint: name } });
   }
+  const fmodule = device.createShaderModule({ code: FLUID_SHADER });
+  const fbgl0 = device.createBindGroupLayout({ entries: [{ binding: 0, ...st('uniform') }, { binding: 1, ...st('storage') }, { binding: 2, ...st('storage') }, { binding: 3, ...st('storage') }] });
+  const fbgl1 = device.createBindGroupLayout({ entries: [0, 1, 2, 3].map((b) => ({ binding: b, ...st('storage') })) });
+  const flayout = device.createPipelineLayout({ bindGroupLayouts: [fbgl0, fbgl1] });
+  for (const name of ['gridClear', 'splat', 'fold', 'blurX', 'blurY', 'fluid']) {
+    pipelines[name] = device.createComputePipeline({ layout: flayout, compute: { module: fmodule, entryPoint: name } });
+  }
 
   const n = sim.n, cap = n;
   const groups = Math.ceil(n / WG);
@@ -150,6 +278,12 @@ export function createGpuEngine(device, sim) {
   const snapBody = device.createBuffer({ size: cap * 16, usage });
   const snapVel = device.createBuffer({ size: cap * 8, usage });
   const startBody = device.createBuffer({ size: cap * 16, usage });
+  const maxCells = sim.fluid.o.maxCells ** 2;
+  const gridBuf = device.createBuffer({ size: maxCells * 12, usage });
+  const densBuf = device.createBuffer({ size: maxCells * 4, usage });
+  const tmpBuf = device.createBuffer({ size: maxCells * 4, usage });
+  const presBuf = device.createBuffer({ size: maxCells * 4, usage });
+  const fparams = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const params = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const coresBuf = device.createBuffer({ size: MAX_CORES * 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const readBody = [0, 1].map(() => device.createBuffer({ size: cap * 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }));
@@ -169,6 +303,14 @@ export function createGpuEngine(device, sim) {
       { binding: 8, resource: { buffer: startBody } },
     ],
   });
+  const fbg0 = device.createBindGroup({ layout: fbgl0, entries: [
+    { binding: 0, resource: { buffer: fparams } }, { binding: 1, resource: { buffer: bodyBuf } },
+    { binding: 2, resource: { buffer: velBuf } }, { binding: 3, resource: { buffer: accBuf } },
+  ] });
+  const fbg1 = device.createBindGroup({ layout: fbgl1, entries: [
+    { binding: 0, resource: { buffer: gridBuf } }, { binding: 1, resource: { buffer: densBuf } },
+    { binding: 2, resource: { buffer: tmpBuf } }, { binding: 3, resource: { buffer: presBuf } },
+  ] });
 
   // initial upload from the CPU state
   const positions = new Float32Array(cap * 4); // x, y, m, r: the renderer reads this directly
@@ -190,8 +332,18 @@ export function createGpuEngine(device, sim) {
 
   const writeParams = () => {
     new Uint32Array(paramData, 0, 2).set([n, sim.k]);
-    new Float32Array(paramData, 8, 8).set([sim.o.dt, sim.o.softening ** 2, 1 - sim.fall, sim.fall * sim.o.fallG, sim.halfH, sim.o.bounce, sim.o.bankDepth, rewindS]);
+    new Float32Array(paramData, 8, 4).set([sim.o.dt, sim.o.softening ** 2, 1 - sim.fall, rewindS]);
     device.queue.writeBuffer(params, 0, paramData);
+  };
+  const fdata = new ArrayBuffer(96);
+  const writeFluidParams = (useAcc) => {
+    const f = sim.fluid, o = f.o, hole = sim.hole;
+    new Uint32Array(fdata, 0, 4).set([n, f.cols, f.rows, f.cols * f.rows]);
+    new Float32Array(fdata, 16, 18).set([
+      f.h, f.ox, f.oy, f.rho0, o.K, o.cohesion, o.visc, o.g, sim.fall, sim.o.dt / o.substeps, sim.halfW, sim.halfH, o.bounce,
+      hole == null ? 0 : sim.cx[hole], hole == null ? 0 : sim.cy[hole], hole == null ? 0 : sim.cm[hole], hole == null ? 1 : sim.ce2[hole], useAcc ? 1 : 0,
+    ]);
+    device.queue.writeBuffer(fparams, 0, fdata);
   };
   const writeCores = () => {
     coreData.fill(0);
@@ -220,6 +372,14 @@ export function createGpuEngine(device, sim) {
     pass.setPipeline(pipelines[name]);
     pass.setBindGroup(0, bindGroup);
     pass.dispatchWorkgroups(groups);
+    pass.end();
+  };
+  const dispatchFluid = (enc, name, count) => {
+    const pass = enc.beginComputePass();
+    pass.setPipeline(pipelines[name]);
+    pass.setBindGroup(0, fbg0);
+    pass.setBindGroup(1, fbg1);
+    pass.dispatchWorkgroups(Math.ceil(count / WG));
     pass.end();
   };
 
@@ -254,10 +414,27 @@ export function createGpuEngine(device, sim) {
           dispatch(enc, 'rewind');
           if (rewindS >= 1) { sim.finishRewind(false); writeCores(); dispatch(enc, 'force'); }
           sim.time += sim.o.dt;
+        } else if (sim.fall > 0) {
+          // fallen: residual gravity (and the hole) from the force kernel while any remains, then
+          // the fluid's substeps; the unseen cores hold still
+          const mu = 1 - sim.fall;
+          sim.fluid.fit(sim.halfW, sim.halfH, n, sim.o.poolFraction);
+          const cells = sim.fluid.cols * sim.fluid.rows;
+          rewindS = 0;
+          writeParams(); writeCores(); writeFluidParams(mu > 1e-3);
+          if (mu > 1e-3) { coreAccel(); dispatch(enc, 'force'); }
+          for (let t = 0; t < sim.fluid.o.substeps; t++) {
+            dispatchFluid(enc, 'gridClear', cells);
+            dispatchFluid(enc, 'splat', n);
+            dispatchFluid(enc, 'fold', cells);
+            dispatchFluid(enc, 'blurX', cells);
+            dispatchFluid(enc, 'blurY', cells);
+            dispatchFluid(enc, 'fluid', n);
+          }
+          sim.time += sim.o.dt;
         } else {
-          const falling = sim.fall > 0; // the unseen cores hold still while the page falls
           coreAccel();
-          if (!falling) sim.driftCores(sim.o.dt); // cores half-kick + drift, in step with the stars
+          sim.driftCores(sim.o.dt); // cores half-kick + drift, in step with the stars
           rewindS = 0;
           writeParams();
           writeCores();
@@ -305,7 +482,7 @@ export function createGpuEngine(device, sim) {
     },
 
     destroy(keepDevice = false) {
-      for (const b of [bodyBuf, velBuf, accBuf, reactBuf, snapBody, snapVel, startBody, params, coresBuf, ...readBody, ...readVel, ...readReact]) b.destroy();
+      for (const b of [bodyBuf, velBuf, accBuf, reactBuf, snapBody, snapVel, startBody, gridBuf, densBuf, tmpBuf, presBuf, params, fparams, coresBuf, ...readBody, ...readVel, ...readReact]) b.destroy();
       if (!keepDevice) device.destroy();
     },
   };

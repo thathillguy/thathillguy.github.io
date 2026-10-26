@@ -92,19 +92,21 @@ body {
   cursor: crosshair;
 }
 
+/* The about copy sits in the top 40% of the second screen; the fluid fills the 60% below it. */
 .about {
   position: relative;
   min-height: 100vh;
-  max-width: 62ch;
+  min-height: 100dvh;
+  max-width: 60ch;
   margin: 0 auto;
-  padding: 22vh 24px 34vh;
-  font-size: clamp(18px, 1.6vw, 22px);
-  line-height: 1.5;
+  padding: calc(56px + 4vh) 24px 60vh;
+  font-size: clamp(16px, 1.3vw, 18px);
+  line-height: 1.45;
   color: var(--ink);
 }
 
 .about h2 {
-  margin: 0 0 1.2em;
+  margin: 0 0 1em;
   font-size: 13px;
   font-weight: 800;
   letter-spacing: 0.18em;
@@ -112,14 +114,14 @@ body {
 }
 
 .about p {
-  margin: 0 0 1.2em;
+  margin: 0 0 1em;
 }
 
 .about .links {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 28px;
-  margin-top: 2em;
+  margin-top: 1.4em;
   font-weight: 500;
 }
 

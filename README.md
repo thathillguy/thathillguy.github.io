@@ -16,6 +16,9 @@ horizon is drawn; the hole shows only through what it does to the field and the 
 - `site/src/sim/gpu.js` runs the stars on the GPU where WebGPU exists: all-pairs gravity in a
   compute shader, integration on the device, positions read back once per frame. Without WebGPU
   it falls back to the CPU tree.
+- `site/src/sim/fluid.js` is what the stars become when the page scrolls: a weakly compressible
+  particle fluid on a grid (deposit, blur, pressure, viscosity, walls) that pools in the lower
+  60% of the view. The state is snapshotted as the fall begins and rewound when you scroll back.
 - `site/src/sim/calibrate.js` times a short run at startup and sizes the star count to the device:
   about 100,000 on a laptop GPU, 15,000 on the CPU path, fewer on weaker hardware.
 - `site/src/sim/driver.js` keeps the sim real-time within a per-frame budget by adapting the

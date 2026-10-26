@@ -19,9 +19,7 @@ export const DEFAULTS = {
   nebulaRadius: 42,      // where a nebula's disc is truncated, in sim units
   scaleLength: 12,       // exponential disc scale length: surface density falls as exp(-r / h)
   dispersion: 0.08,      // random radial / tangential velocity kick, as a fraction of circular speed
-  fallG: 160,            // the downward field when the page "falls" (sim units / s^2)
-  bounce: 0.35,          // restitution at the floor
-  bankDepth: 7,          // how thick the bank of fallen stars is (sim units)
+  poolFraction: 0.6,     // when the page falls, the fluid fills this much of the viewport's height
   coreSoftening: 5,      // Plummer softening of the cores
   softening: 1,          // Plummer softening between stars
   separation: 110,       // starting distance between the two cores (their apoapsis)
@@ -44,13 +42,9 @@ const EMPTY = -1, INTERNAL = -2, CROWD = -3; // quadtree leaf states
 const MAX_DEPTH = 24;
 
 /** Schwarzschild radius of a mass m: 2 G m / c^2, with G = 1. */
-const REWIND_SECONDS = 0.6; // sim seconds to carry the stars back after a fall
+import { Fluid } from './fluid.js';
 
-/** A star's resting height in the bank of fallen stars: a hash of its slot, denser at the bottom. */
-export function bankOffset(i, depth) {
-  const u = (Math.imul(i + 1, 2654435761) >>> 0) / 4294967296;
-  return 0.3 + depth * u * u;
-}
+const REWIND_SECONDS = 0.6; // sim seconds to carry the stars back after a fall
 
 export function schwarzschildRadius(m, c) {
   return (2 * m) / (c * c);
@@ -89,7 +83,6 @@ export class NBody {
     this.cap = cap;
     for (const k of ['x', 'y', 'vx', 'vy', 'ax', 'ay', 'r', 'm']) this[k] = new Float64Array(cap);
     this.colour = new Uint8Array(cap);
-    this.floor = new Float32Array(cap); // each star's resting height in the bank, as an offset above the bottom edge
     this.home = new Uint8Array(cap);
     this._dead = new Uint8Array(cap);
     this._keys = new Float64Array(cap);
@@ -132,7 +125,8 @@ export class NBody {
       this.spin[c] = c === 0 ? 1 : -1; // one prograde, one retrograde: classic tidal tails
     }
     this.hole = null;
-    this.fall = 0;        // 0: gravity as usual; 1: a uniform downward field and a floor instead
+    this.fall = 0;        // 0: gravity as usual; 1: the stars are a fluid pooled at the bottom of the view
+    this.fluid = new Fluid();
     this.fallen = false;
     this.snap = null;     // the state the moment a fall began: x, y, vx, vy, and the nebula cores
     this.rewind = null;   // { step, total } while the stars are being carried back to the snapshot
@@ -260,7 +254,6 @@ export class NBody {
     this.r[i] = radius;
     this.m[i] = (this.density ?? 1) * radius ** 3;
     this.colour[i] = colourIndex;
-    this.floor[i] = bankOffset(i, this.o.bankDepth);
     this.home[i] = home;
     return i;
   }
@@ -315,7 +308,7 @@ export class NBody {
     const view = keys.subarray(0, n);
     view.sort();
     const tmp = this._scratch, tmp8 = this._scratch8;
-    for (const arr of [this.x, this.y, this.vx, this.vy, this.ax, this.ay, this.r, this.m, this.floor]) {
+    for (const arr of [this.x, this.y, this.vx, this.vy, this.ax, this.ay, this.r, this.m]) {
       for (let i = 0; i < n; i++) tmp[i] = arr[view[i] % 1048576];
       arr.set(tmp.subarray(0, n));
     }
@@ -502,36 +495,48 @@ export class NBody {
       this.time += dt;
       return;
     }
-    const falling = this.fall > 0; // the unseen cores hold still while the page falls
+    if (this.fall > 0) { this._fluidStep(); return; } // the unseen cores hold still while the page is fallen
     for (let i = 0; i < this.n; i++) {
       vx[i] += ax[i] * h; vy[i] += ay[i] * h;
       x[i] += vx[i] * dt; y[i] += vy[i] * dt;
     }
-    if (falling) this._floor();
-    else this.driftCores(dt);
+    this.driftCores(dt);
     this._accelerate();
-    if (falling) {
-      const g = this.fall * this.o.fallG;
-      for (let i = 0; i < this.n; i++) ay[i] += g;
-    }
     for (let i = 0; i < this.n; i++) { vx[i] += ax[i] * h; vy[i] += ay[i] * h; }
-    if (!falling) this.kickCores(h);
+    this.kickCores(h);
     this.cull();
     this.time += dt;
     this.stats.steps++;
   }
 
-  /** During a fall, stars that reach their resting height in the bank bounce and settle. */
-  _floor() {
-    const { n, y, vx, vy, floor } = this;
-    const bottom = this.halfH, bounce = this.o.bounce;
+  /**
+   * A step while the page is fallen: whatever gravity remains (and the hole) as a base
+   * acceleration, then the fluid's substeps. With gravity fully faded the tree is skipped.
+   */
+  _fluidStep() {
+    const { dt } = this.o, n = this.n, fall = this.fall, mu = 1 - fall;
+    const { ax, ay } = this;
+    if (mu > 1e-3) this._accelerate();
+    else this._holePull();
+    this.fluid.fit(this.halfW, this.halfH, n, this.o.poolFraction);
+    const sub = this.fluid.o.substeps;
+    for (let s = 0; s < sub; s++) this.fluid.substep(this, n, dt / sub, fall);
+    this.cull();
+    this.time += dt;
+    this.stats.steps++;
+  }
+
+  /** Only the pointer's hole pulling on the stars (into ax, ay); zero without one. */
+  _holePull() {
+    const { n, x, y, ax, ay } = this;
+    const c = this.hole;
+    if (c == null) { ax.fill(0, 0, n); ay.fill(0, 0, n); return; }
+    const hx = this.cx[c], hy = this.cy[c], hm = this.cm[c], e2 = this.ce2[c];
     for (let i = 0; i < n; i++) {
-      const fy = bottom - floor[i];
-      if (y[i] > fy) {
-        y[i] = fy;
-        if (vy[i] > 0) vy[i] = -vy[i] * bounce;
-        vx[i] *= 0.97;
-      }
+      const dx = hx - x[i], dy = hy - y[i];
+      const q = dx * dx + dy * dy + e2;
+      const f = hm / (q * Math.sqrt(q));
+      ax[i] = f * dx; ay[i] = f * dy;
     }
   }
 
