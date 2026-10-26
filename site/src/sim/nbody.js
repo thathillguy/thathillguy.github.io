@@ -20,6 +20,8 @@ export const DEFAULTS = {
   scaleLength: 12,       // exponential disc scale length: surface density falls as exp(-r / h)
   dispersion: 0.08,      // random radial / tangential velocity kick, as a fraction of circular speed
   poolFraction: 0.4,     // when the page falls, the fluid fills this much of the viewport's height
+  splashRadius: 14,      // a tap on the water kicks the stars within this radius...
+  splashSpeed: 110,      // ...outward, by up to this much (sim units / s) at the centre
   coreSoftening: 5,      // Plummer softening of the cores
   softening: 1,          // Plummer softening between stars
   separation: 110,       // starting distance between the two cores (their apoapsis)
@@ -128,6 +130,7 @@ export class NBody {
     this.fall = 0;        // 0: gravity as usual; 1: the stars are a fluid pooled at the bottom of the view
     this.fluid = new Fluid();
     this.boat = null;     // the about card's hull while the page is fallen: { x, y, c, s, hw, hh, vx, vy }
+    this.pending = null;  // a splash waiting for the next fluid step: { x, y, r, a }
     this.fallen = false;
     this.snap = null;     // the state the moment a fall began: x, y, vx, vy, and the nebula cores
     this.rewind = null;   // { step, total } while the stars are being carried back to the snapshot
@@ -223,6 +226,12 @@ export class NBody {
     this.snap = null;
     this.sortPaused = false;
     if (recompute) this._accelerate();
+  }
+
+  /** A stone into the pool at (x, y): the water nearby is thrown outward on the next step. */
+  splash(x, y) {
+    if (this.fall <= 0 || this.rewind) return;
+    this.pending = { x, y, r: this.o.splashRadius, a: this.o.splashSpeed };
   }
 
   setHole(x, y) {
@@ -520,6 +529,7 @@ export class NBody {
     if (mu > 1e-3) this._accelerate();
     else this._holePull();
     this.fluid.fit(this.halfW, this.halfH, n, this.o.poolFraction);
+    if (this.pending) { this.fluid.impulse(this, n, this.pending); this.pending = null; }
     const sub = this.fluid.o.substeps;
     for (let s = 0; s < sub; s++) this.fluid.substep(this, n, dt / sub, fall);
     this.cull();

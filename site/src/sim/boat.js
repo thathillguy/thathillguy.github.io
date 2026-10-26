@@ -75,6 +75,11 @@ export class Boat {
     }
 
     const m = this.sigma * A, H = 2 * hh, I = (m * (W * W + H * H)) / 12;
+    if (!(m > 0) || !Number.isFinite(fx + fy + tq)) { // no hull yet, or a bad pressure sample: fall freely
+      if (!Number.isFinite(fx + fy + tq)) console.warn('boat: non-finite pressure force', { fx, fy, tq, wet, cols: fluid.cols, rows: fluid.rows, h: fluid.h });
+      this.vy += g * dt; this.y += this.vy * dt;
+      return;
+    }
     let ax = fx / m, ay = fy / m + g, al = tq / I;
     if (this.wet > 0) {
       const f = Math.min(1, 2 * this.wet);

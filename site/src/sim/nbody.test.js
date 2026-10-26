@@ -185,3 +185,26 @@ test('the about card floats: it settles with roughly its density fraction submer
   }
   assert.equal(inside, 0, 'no star inside the hull');
 });
+
+test('a splash throws the water outward from the tap and nowhere else', () => {
+  const sim = new NBody({ bodies: 9000, random: seeded(3), halfW: 36, halfH: 14, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
+  sim.setFall(1);
+  for (let k = 0; k < 60 * 5; k++) sim.step();
+  const sx = 0, sy = sim.halfH - 3;
+  const before = sim.energy();
+  sim.splash(sx, sy);
+  assert.ok(sim.pending, 'queued');
+  sim.step();
+  assert.equal(sim.pending, null, 'applied');
+  let near = 0, outward = 0, far = 0, farFast = 0;
+  for (let i = 0; i < sim.n; i++) {
+    const dx = sim.x[i] - sx, dy = sim.y[i] - sy, d = Math.hypot(dx, dy);
+    const vr = (sim.vx[i] * dx + sim.vy[i] * dy) / Math.max(d, 1e-6);
+    if (d < sim.o.splashRadius * 0.7) { near++; if (vr > 5) outward++; }
+    else if (d > sim.o.splashRadius * 1.6) { far++; if (Math.hypot(sim.vx[i], sim.vy[i]) > 40) farFast++; }
+  }
+  assert.ok(near > 50, `${near} stars near the tap`);
+  assert.ok(outward > 0.6 * near, `${outward} of ${near} moving outward`);
+  assert.ok(far > 500 && farFast < 0.02 * far, `${farFast} of ${far} far stars disturbed`);
+  assert.ok(sim.energy() > before, 'the tap put energy in');
+});

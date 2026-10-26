@@ -121,6 +121,7 @@ struct FParams {
   he2: f32, useAcc: f32, bx: f32, by: f32,
   bc: f32, bs: f32, bhw: f32, bhh: f32,
   bvx: f32, bvy: f32, hasBoat: f32, margin: f32,
+  ix: f32, iy: f32, ir: f32, ia: f32,
 }
 // the ship's profile, as fractions of its box (HULL_SHAPE in fluid.js)
 const SHAPE = array<vec2<f32>, 5>(vec2<f32>(0.0, 0.0), vec2<f32>(0.92, 0.0), vec2<f32>(1.0, 0.4), vec2<f32>(0.86, 1.0), vec2<f32>(0.06, 1.0));
@@ -203,6 +204,18 @@ fn blurY(@builtin(global_invocation_id) gid: vec3<u32>) {
   let sm = (tmp[u32(clamp(cy - 2, lo, hi)) * q.cols + cx] + 4.0 * tmp[u32(clamp(cy - 1, lo, hi)) * q.cols + cx] + 6.0 * tmp[u32(clamp(cy, lo, hi)) * q.cols + cx]
           + 4.0 * tmp[u32(clamp(cy + 1, lo, hi)) * q.cols + cx] + tmp[u32(clamp(cy + 2, lo, hi)) * q.cols + cx]) / 16.0;
   pres[c] = q.K * max(sm / q.rho0 - 1.0, -q.cohesion);
+}
+
+// a splash: a one-shot radial kick (see Fluid.impulse in fluid.js)
+@compute @workgroup_size(${WG})
+fn impulse(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= q.n) { return; }
+  let d = body[i].xy - vec2<f32>(q.ix, q.iy);
+  let d2 = dot(d, d);
+  if (d2 >= q.ir * q.ir || d2 < 1e-6) { return; }
+  let dist = sqrt(d2); let w = 1.0 - dist / q.ir;
+  vel[i] += d * (q.ia * w * w / dist);
 }
 
 @compute @workgroup_size(${WG})
@@ -296,7 +309,7 @@ export function createGpuEngine(device, sim) {
   const fbgl0 = device.createBindGroupLayout({ entries: [{ binding: 0, ...st('uniform') }, { binding: 1, ...st('storage') }, { binding: 2, ...st('storage') }, { binding: 3, ...st('storage') }] });
   const fbgl1 = device.createBindGroupLayout({ entries: [0, 1, 2, 3].map((b) => ({ binding: b, ...st('storage') })) });
   const flayout = device.createPipelineLayout({ bindGroupLayouts: [fbgl0, fbgl1] });
-  for (const name of ['gridClear', 'splat', 'fold', 'blurX', 'blurY', 'fluid']) {
+  for (const name of ['gridClear', 'splat', 'fold', 'blurX', 'blurY', 'fluid', 'impulse']) {
     pipelines[name] = device.createComputePipeline({ layout: flayout, compute: { module: fmodule, entryPoint: name } });
   }
 
@@ -374,10 +387,12 @@ export function createGpuEngine(device, sim) {
   const writeFluidParams = (useAcc) => {
     const f = sim.fluid, o = f.o, hole = sim.hole, b = sim.boat;
     new Uint32Array(fdata, 0, 4).set([n, f.cols, f.rows, f.cols * f.rows]);
-    new Float32Array(fdata, 16, 28).set([
+    const im = sim.pending;
+    new Float32Array(fdata, 16, 32).set([
       f.h, f.ox, f.oy, f.rho0, o.K, o.cohesion, o.visc, o.g, sim.fall, sim.o.dt / o.substeps, sim.halfW, sim.halfH, o.bounce,
       hole == null ? 0 : sim.cx[hole], hole == null ? 0 : sim.cy[hole], hole == null ? 0 : sim.cm[hole], hole == null ? 1 : sim.ce2[hole], useAcc ? 1 : 0,
       b ? b.x : 0, b ? b.y : 0, b ? b.c : 1, b ? b.s : 0, b ? b.hw : 0, b ? b.hh : 0, b ? b.vx : 0, b ? b.vy : 0, b ? 1 : 0, HULL_MARGIN,
+      im ? im.x : 0, im ? im.y : 0, im ? im.r : 0, im ? im.a : 0,
     ]);
     device.queue.writeBuffer(fparams, 0, fdata);
   };
@@ -459,6 +474,7 @@ export function createGpuEngine(device, sim) {
           const cells = sim.fluid.cols * sim.fluid.rows;
           rewindS = 0;
           writeParams(); writeCores(); writeFluidParams(mu > 1e-3);
+          if (sim.pending) { dispatchFluid(enc, 'impulse', n); sim.pending = null; }
           if (mu > 1e-3) { coreAccel(); dispatch(enc, 'force'); }
           for (let t = 0; t < sim.fluid.o.substeps; t++) {
             dispatchFluid(enc, 'gridClear', cells);

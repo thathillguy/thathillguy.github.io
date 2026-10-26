@@ -89,6 +89,18 @@ export class Fluid {
     this.rho0 = ((n / (2 * halfW * depth)) * h * h) / (1 + (0.5 * this.o.g * depth) / this.o.K);
   }
 
+  /** A radial kick: stars within r of (x, y) gain up to `a` outward, falling off as (1 - d/r)^2. */
+  impulse(sim, n, { x, y, r, a }) {
+    const { x: px, y: py, vx, vy } = sim;
+    const r2 = r * r;
+    for (let i = 0; i < n; i++) {
+      const dx = px[i] - x, dy = py[i] - y, d2 = dx * dx + dy * dy;
+      if (d2 >= r2 || d2 < 1e-6) continue;
+      const d = Math.sqrt(d2), w = 1 - d / r, k = (a * w * w) / d;
+      vx[i] += dx * k; vy[i] += dy * k;
+    }
+  }
+
   /** The pressure at a world point, bilinear on the cell centres of `pres` (a grid laid out like this one's). */
   pressureAt(pres, wx, wy) {
     const { cols, rows, h, ox, oy } = this;

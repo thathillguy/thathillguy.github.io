@@ -102,6 +102,10 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
       if (sim.fall >= BOAT_RELEASE && !sim.rewind) {
         if (!boat.active) { boat.pin(tx, ty); boat.active = true; boatReturning = false; }
         boat.step(dtSim, sim.fluid, driver.pressure, driver.positions, driver.velocities, sim.n, sim.halfW, sim.halfH, sim.fluid.o.g * sim.fall);
+        if (![boat.x, boat.y, boat.th, boat.vx, boat.vy, boat.om].every(Number.isFinite)) {
+          console.warn('boat went non-finite; reset', { hw, hh, wet: boat.wet, pressureFinite: Number.isFinite(driver.pressure[0]) });
+          boat.pin(tx, ty); boat.active = true;
+        }
       } else {
         if (boat.active) { boat.active = false; boatReturning = true; }
         if (boatReturning) {
@@ -157,6 +161,7 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
       pointerId = e.pointerId;
       lensState.target = 1;
       place(e);
+      sim.splash((e.clientX - width / 2) / pxPerUnit, (e.clientY - height / 2) / pxPerUnit); // only while the page is fallen
     };
     const onMove = (e) => { if (e.pointerId === pointerId) place(e); };
     const onUp = (e) => {
