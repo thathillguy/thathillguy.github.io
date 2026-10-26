@@ -27,8 +27,11 @@ horizon is drawn; the hole shows only through what it does to the field and the 
   so where they overlap the colour deepens like ink on paper, then applies the lens pass.
   `site/src/render/warp.js` bends the name card with the same field through an SVG filter.
 
-`?gpu=0` forces the CPU path and `?stars=N` pins the star count. When benchmarking, keep the browser window in front; macOS slows a
-background app's threads several-fold.
+`?gpu=0` forces the CPU path and `?stars=N` pins the star count. When benchmarking, keep the
+browser window in front; macOS slows a background app's threads several-fold.
+
+The about card's copy is in `site/src/App.jsx`; it quotes the star count the calibration chose.
+The resume it links is `site/public/resume.pdf`, served at `/resume.pdf`.
 
 ## Develop
 
@@ -36,6 +39,7 @@ background app's threads several-fold.
     npm run dev      # local server with hot reload
     npm test         # physics and driver tests
     npm run build    # production build in dist/
+    npm run preview  # serve dist/ at http://localhost:4173 (run from the repo root, where vite.config.js is)
 
 ## Deploy
 
