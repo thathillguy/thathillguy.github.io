@@ -4,7 +4,7 @@
 // the colour deepens instead of flattening, so dense regions read as tone.
 // A 2D canvas fallback keeps the page working where WebGL2 is unavailable.
 
-export const PALETTE = ['#E24e42', '#e9b000', '#EB6E80', '#008F95'];
+import { COLOURS as PALETTE } from '../sim/nbody.js';
 
 const DISC_VS = `#version 300 es
 layout(location = 0) in vec2 a_corner;
@@ -35,7 +35,7 @@ precision mediump float;
 in vec2 v_p;
 in float v_r;
 flat in int v_c;
-uniform vec3 u_palette[4];
+uniform vec3 u_palette[2];
 out vec4 o;
 void main() {
   vec3 fill = u_palette[v_c];

@@ -10,15 +10,15 @@
 // A star's drawn disc is a symbol. Its real radius is negligible next to its spacing, so stars
 // never touch: the dynamics are collisionless gravity, which is what galaxy encounters are.
 
-export const COLOURS = ['#E24e42', '#e9b000', '#EB6E80', '#008F95'];
-const NEBULA_COLOURS = [[0, 1], [2, 3]]; // each nebula draws from its own pair
+export const COLOURS = ['#3A7BD5', '#F28C28']; // one colour per nebula: blue, orange
 
 export const DEFAULTS = {
   bodies: 50000,
   nebulaMass: 3000,      // each: unseen core plus stars
   coreFraction: 0.7,     // share of nebulaMass in the unseen core (a dark halo, in effect)
-  nebulaRadius: 34,      // disc radius in sim units
-  profile: 0.8,          // star radius within a nebula is R * u^profile: lower is denser at the core
+  nebulaRadius: 42,      // where a nebula's disc is truncated, in sim units
+  scaleLength: 12,       // exponential disc scale length: surface density falls as exp(-r / h)
+  dispersion: 0.08,      // random radial / tangential velocity kick, as a fraction of circular speed
   coreSoftening: 5,      // Plummer softening of the cores
   softening: 1,          // Plummer softening between stars
   separation: 110,       // starting distance between the two cores (their apoapsis)
@@ -194,27 +194,36 @@ export class NBody {
   }
 
   /** Circular speed at distance rho from a core, counting the disc mass inside rho. */
+  // Fraction of an exponential disc's mass inside rho, normalised to the truncation radius.
+  _enclosed(rho) {
+    const { nebulaRadius: R, scaleLength: h } = this.o;
+    const m = (r) => 1 - (1 + r / h) * Math.exp(-r / h);
+    return Math.min(1, m(rho) / m(R));
+  }
+
   _discSpeed(c, rho) {
-    const { nebulaMass, coreFraction, coreSoftening, nebulaRadius, profile } = this.o;
-    const enclosed = Math.min(1, Math.pow(rho / nebulaRadius, 1 / profile));
-    const discMass = nebulaMass * (1 - coreFraction) * enclosed;
+    const { nebulaMass, coreFraction, coreSoftening } = this.o;
+    const discMass = nebulaMass * (1 - coreFraction) * this._enclosed(rho);
     const vCore = circularSpeed(this.cm[c], coreSoftening, rho);
     return Math.sqrt(vCore * vCore + discMass / Math.max(rho, 0.5));
   }
 
-  // A star in nebula c's disc (or, with `rim`, just at its edge, drifting inward), on a
-  // near-circular orbit about its core, riding with the core.
+  // A star in nebula c's exponential disc (or, with `rim`, out at its faint edge, drifting
+  // inward), on a near-circular orbit about its core with a little random motion, riding with
+  // the core. The exponential profile has no edge: the disc just thins out.
   _spawn(c, rim = false) {
-    const R = this.o.nebulaRadius;
-    const rho = rim ? R * (0.85 + 0.2 * this.random()) : R * Math.pow(this.random(), this.o.profile) + 0.3;
+    const { nebulaRadius: R, scaleLength: h, dispersion, minRadius, maxRadius } = this.o;
+    let rho;
+    if (rim) rho = R * (0.85 + 0.15 * this.random());
+    else do rho = -h * Math.log(this.random() * this.random()); while (rho > R); // r e^(-r/h)
+    rho = Math.max(rho, 0.3);
     const t = 2 * Math.PI * this.random();
     const ux = Math.cos(t), uy = Math.sin(t);
-    const factor = rim ? 0.9 + 0.08 * this.random() : 0.96 + 0.08 * this.random();
-    const v = this.spin[c] * this._discSpeed(c, rho) * factor;
-    const { minRadius, maxRadius } = this.o;
+    const vc = this._discSpeed(c, rho);
+    const vt = this.spin[c] * vc * ((rim ? 0.9 : 1) + dispersion * (2 * this.random() - 1));
+    const vr = vc * dispersion * (2 * this.random() - 1) - (rim ? 0.05 * vc : 0);
     const radius = minRadius + (maxRadius - minRadius) * this.random();
-    const pair = NEBULA_COLOURS[c];
-    this.addBody(this.cx[c] + rho * ux, this.cy[c] + rho * uy, this.cvx[c] - uy * v, this.cvy[c] + ux * v, radius, pair[(this.n >> 1) & 1], c);
+    this.addBody(this.cx[c] + rho * ux, this.cy[c] + rho * uy, this.cvx[c] - uy * vt + ux * vr, this.cvy[c] + ux * vt + uy * vr, radius, c, c);
   }
 
   // ---- forces (reference, Barnes-Hut) ------------------------------------------------------------
