@@ -44,6 +44,8 @@ const EMPTY = -1, INTERNAL = -2, CROWD = -3; // quadtree leaf states
 const MAX_DEPTH = 24;
 
 /** Schwarzschild radius of a mass m: 2 G m / c^2, with G = 1. */
+const REWIND_SECONDS = 0.6; // sim seconds to carry the stars back after a fall
+
 /** A star's resting height in the bank of fallen stars: a hash of its slot, denser at the bottom. */
 export function bankOffset(i, depth) {
   const u = (Math.imul(i + 1, 2654435761) >>> 0) / 4294967296;
@@ -132,7 +134,11 @@ export class NBody {
     this.hole = null;
     this.fall = 0;        // 0: gravity as usual; 1: a uniform downward field and a floor instead
     this.fallen = false;
-    this.recovering = false;
+    this.snap = null;     // the state the moment a fall began: x, y, vx, vy, and the nebula cores
+    this.rewind = null;   // { step, total } while the stars are being carried back to the snapshot
+    this.sortPaused = false;        // the CPU reorder would move stars between slots under a snapshot
+    this.snapshotRequested = false; // flags for a GPU mirror, which holds the live state itself
+    this.rewindRequested = false;
   }
 
   // Random orbital velocities never sum to exactly zero: let each core absorb its disc's residual,
@@ -174,12 +180,54 @@ export class NBody {
   /** Put the black hole at (x, y), creating it if needed. It is pinned: it pulls but does not move. */
   /**
    * How far the page has "fallen", 0..1: mutual gravity fades out as a uniform downward field
-   * and a floor fade in. Coming back from a fall, the banked stars are returned to the discs.
+   * and a floor fade in. The moment a fall begins the state is snapshotted; when the page comes
+   * back the same stars are carried back to that snapshot and gravity resumes where it left off.
    */
   setFall(f) {
-    this.fall = Math.min(1, Math.max(0, f));
-    if (this.fall > 0.6) this.fallen = true;
-    if (this.fall < 0.25 && this.fallen) { this.fallen = false; this.recovering = true; }
+    f = Math.min(1, Math.max(0, f));
+    if (f > 0 && this.fall === 0 && !this.rewind) this._takeSnapshot();
+    this.fall = f;
+    if (f > 0.3) this.fallen = true;
+    if (f < 0.15 && this.fallen) { this.fallen = false; this._startRewind(); }
+    else if (f === 0 && !this.rewind) { this.snap = null; this.sortPaused = false; } // a nudge, not a fall
+  }
+
+  _takeSnapshot() {
+    const { n, x, y, vx, vy } = this;
+    this.snap = {
+      x: x.slice(0, n), y: y.slice(0, n), vx: vx.slice(0, n), vy: vy.slice(0, n),
+      cx: this.cx.slice(0, 2), cy: this.cy.slice(0, 2), cvx: this.cvx.slice(0, 2), cvy: this.cvy.slice(0, 2),
+    };
+    this.sortPaused = true; // slots must keep their stars until the snapshot is restored or dropped
+    this.snapshotRequested = true;
+  }
+
+  _startRewind() {
+    if (!this.snap || this.rewind) return;
+    const { n, x, y } = this;
+    this.rewind = { step: 0, total: Math.max(1, Math.round(REWIND_SECONDS / this.o.dt)), x0: x.slice(0, n), y0: y.slice(0, n) };
+    this.rewindRequested = true;
+  }
+
+  /** Rewind progress for this step, 0..1 (eased); 1 means restore exactly. */
+  _rewindProgress() {
+    const r = this.rewind;
+    r.step++;
+    if (r.step >= r.total) return 1;
+    const t = r.step / r.total;
+    return t * t * (3 - 2 * t);
+  }
+
+  /** The last rewind step: everything back as it was, cores included, and gravity resumes. */
+  finishRewind(recompute = true) {
+    const { snap, n } = this;
+    this.x.set(snap.x.subarray(0, n)); this.y.set(snap.y.subarray(0, n));
+    this.vx.set(snap.vx.subarray(0, n)); this.vy.set(snap.vy.subarray(0, n));
+    for (let c = 0; c < 2; c++) { this.cx[c] = snap.cx[c]; this.cy[c] = snap.cy[c]; this.cvx[c] = snap.cvx[c]; this.cvy[c] = snap.cvy[c]; }
+    this.rewind = null;
+    this.snap = null;
+    this.sortPaused = false;
+    if (recompute) this._accelerate();
   }
 
   setHole(x, y) {
@@ -267,7 +315,7 @@ export class NBody {
     const view = keys.subarray(0, n);
     view.sort();
     const tmp = this._scratch, tmp8 = this._scratch8;
-    for (const arr of [this.x, this.y, this.vx, this.vy, this.ax, this.ay, this.r, this.m]) {
+    for (const arr of [this.x, this.y, this.vx, this.vy, this.ax, this.ay, this.r, this.m, this.floor]) {
       for (let i = 0; i < n; i++) tmp[i] = arr[view[i] % 1048576];
       arr.set(tmp.subarray(0, n));
     }
@@ -299,7 +347,7 @@ export class NBody {
       if (x[i] < minX) minX = x[i]; if (x[i] > maxX) maxX = x[i];
       if (y[i] < minY) minY = y[i]; if (y[i] > maxY) maxY = y[i];
     }
-    if (n > 64 && this.stats.steps % 8 === 0) this._sortMorton(minX, minY, Math.max(maxX - minX, maxY - minY, 1e-9));
+    if (n > 64 && this.stats.steps % 8 === 0 && !this.sortPaused) this._sortMorton(minX, minY, Math.max(maxX - minX, maxY - minY, 1e-9));
     const half = Math.max(maxX - minX, maxY - minY, 1) * 0.5 * 1.001 + 1e-6;
     const root = this._newNode((minX + maxX) / 2, (minY + maxY) / 2, half);
     const { nx, ny, nh, nm, ncx, ncy, nleaf, nchild } = this;
@@ -442,19 +490,32 @@ export class NBody {
     const { dt } = this.o;
     const h = dt / 2;
     const { x, y, vx, vy, ax, ay } = this;
+    if (this.rewind) {
+      // carried back toward the snapshot, no physics; the last step restores it exactly
+      const s = this._rewindProgress();
+      if (s >= 1) { this.finishRewind(); return; }
+      const { x0, y0 } = this.rewind, { snap } = this;
+      for (let i = 0; i < this.n; i++) {
+        x[i] = x0[i] + (snap.x[i] - x0[i]) * s; y[i] = y0[i] + (snap.y[i] - y0[i]) * s;
+        vx[i] = 0; vy[i] = 0;
+      }
+      this.time += dt;
+      return;
+    }
+    const falling = this.fall > 0; // the unseen cores hold still while the page falls
     for (let i = 0; i < this.n; i++) {
       vx[i] += ax[i] * h; vy[i] += ay[i] * h;
       x[i] += vx[i] * dt; y[i] += vy[i] * dt;
     }
-    if (this.fall > 0) this._floor();
-    this.driftCores(dt);
+    if (falling) this._floor();
+    else this.driftCores(dt);
     this._accelerate();
-    if (this.fall > 0) {
+    if (falling) {
       const g = this.fall * this.o.fallG;
       for (let i = 0; i < this.n; i++) ay[i] += g;
     }
     for (let i = 0; i < this.n; i++) { vx[i] += ax[i] * h; vy[i] += ay[i] * h; }
-    this.kickCores(h);
+    if (!falling) this.kickCores(h);
     this.cull();
     this.time += dt;
     this.stats.steps++;
@@ -519,25 +580,14 @@ export class NBody {
         if (!dead[i] && dx * dx + dy * dy < rr) { dead[i] = 1; this.stats.swallowed++; changed++; }
       }
     }
-    if (this.recovering) {
-      // after a fall: a few percent of the banked stars per step go back into the discs
-      const band = this.halfH - this.o.bankDepth - 1;
-      let quota = Math.ceil(0.04 * n), found = 0;
-      for (let i = 0; i < n; i++) {
-        if (dead[i] || y[i] < band) continue;
-        found++;
-        if (quota > 0) { dead[i] = 2; quota--; changed++; }
-      }
-      if (!found) this.recovering = false;
-    }
     if (!changed) return null;
     const rewritten = [];
     for (let i = 0; i < n; i++) {
       if (!dead[i]) continue;
-      const rim = dead[i] === 1;
       dead[i] = 0;
       this.n = i;                       // respawn writes into slot i
-      this._spawn(this.home[i], rim);
+      this._spawn(this.home[i], true);
+      if (this.snap) { this.snap.x[i] = this.x[i]; this.snap.y[i] = this.y[i]; this.snap.vx[i] = this.vx[i]; this.snap.vy[i] = this.vy[i]; }
       rewritten.push(i);
     }
     this.n = n;

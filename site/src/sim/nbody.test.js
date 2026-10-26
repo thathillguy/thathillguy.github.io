@@ -116,20 +116,28 @@ test('a black hole under the pointer pulls stars in, swallows them, and can be r
   assert.equal(sim.count, 2000);
 });
 
-test('a fall banks every star at the bottom edge, and coming back refills the discs', () => {
+test('a fall banks every star at the bottom edge, and coming back rewinds the same stars exactly', () => {
   const sim = new NBody({ bodies: 1500, random: seeded(5) });
+  for (let k = 0; k < 60; k++) sim.step();
+  const before = { x: sim.x.slice(0, sim.n), y: sim.y.slice(0, sim.n), vx: sim.vx.slice(0, sim.n), e: sim.energy() };
   sim.setFall(1);
   for (let k = 0; k < 120 * 6; k++) sim.step();
   const bottom = sim.halfH, depth = sim.o.bankDepth + 0.5;
   let banked = 0;
   for (let i = 0; i < sim.n; i++) if (sim.y[i] > bottom - depth && sim.y[i] <= bottom) banked++;
   assert.ok(banked > 0.97 * sim.n, `${banked} of ${sim.n} in the bank`);
+  assert.equal(sim.count, 1500);
   sim.setFall(0);
-  assert.ok(sim.recovering);
-  for (let k = 0; k < 120; k++) sim.step();
-  assert.ok(!sim.recovering, 'recovery finishes');
-  let still = 0;
-  for (let i = 0; i < sim.n; i++) if (sim.y[i] > bottom - depth) still++;
-  assert.ok(still < 0.02 * sim.n, `${still} still banked`);
+  assert.ok(sim.rewind, 'a rewind starts');
+  const total = sim.rewind.total;
+  sim.step();
+  assert.ok(sim.y[0] < bottom - depth || sim.y[0] > before.y[0], 'stars are on their way back');
+  for (let k = 1; k < total; k++) sim.step();
+  assert.equal(sim.rewind, null, 'the rewind finishes');
+  assert.deepEqual(sim.x.slice(0, sim.n), before.x);
+  assert.deepEqual(sim.y.slice(0, sim.n), before.y);
+  assert.deepEqual(sim.vx.slice(0, sim.n), before.vx);
+  assert.ok(Math.abs(sim.energy() - before.e) < 1e-9 * Math.abs(before.e), 'energy is what it was');
+  for (let k = 0; k < 30; k++) sim.step();
   assert.equal(sim.count, 1500);
 });

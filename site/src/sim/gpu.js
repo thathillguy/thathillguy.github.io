@@ -8,7 +8,7 @@ const WG = 256;
 const MAX_CORES = 4;
 
 const SHADER = /* wgsl */ `
-struct Params { n: u32, k: u32, dt: f32, eps2: f32, mutual: f32, gdown: f32, bottom: f32, bounce: f32, depth: f32 }
+struct Params { n: u32, k: u32, dt: f32, eps2: f32, mutual: f32, gdown: f32, bottom: f32, bounce: f32, depth: f32, rewind: f32 }
 struct Core { pos: vec2<f32>, m: f32, e2: f32 }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var<storage, read_write> body: array<vec4<f32>>;  // x, y, m, r
@@ -16,6 +16,9 @@ struct Core { pos: vec2<f32>, m: f32, e2: f32 }
 @group(0) @binding(3) var<storage, read_write> acc: array<vec2<f32>>;
 @group(0) @binding(4) var<uniform> cores: array<Core, ${MAX_CORES}>;
 @group(0) @binding(5) var<storage, read_write> react: array<vec2<f32>>; // per workgroup, per core: sum m * a_on_core
+@group(0) @binding(6) var<storage, read_write> snapBody: array<vec4<f32>>;  // state when the fall began
+@group(0) @binding(7) var<storage, read_write> snapVel: array<vec2<f32>>;
+@group(0) @binding(8) var<storage, read_write> startBody: array<vec4<f32>>; // state when the rewind began
 
 var<workgroup> tile: array<vec4<f32>, ${WG}>;
 var<workgroup> red: array<vec2<f32>, ${WG}>;
@@ -98,6 +101,16 @@ fn kick(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= p.n) { return; }
   vel[i] = vel[i] + acc[i] * (0.5 * p.dt);
+}
+
+// after a fall: carried from where it lies back to the snapshot; at 1 restored exactly
+@compute @workgroup_size(${WG})
+fn rewind(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= p.n) { return; }
+  if (p.rewind >= 1.0) { body[i] = snapBody[i]; vel[i] = snapVel[i]; return; }
+  body[i] = vec4<f32>(mix(startBody[i].xy, snapBody[i].xy, p.rewind), body[i].zw);
+  vel[i] = vec2<f32>(0.0);
 }`;
 
 /** A WebGPU device, or null where there is none. Cheap enough to decide the star count on. */
@@ -119,10 +132,11 @@ export function createGpuEngine(device, sim) {
   const bgl = device.createBindGroupLayout({ entries: [
     { binding: 0, ...st('uniform') }, { binding: 1, ...st('storage') }, { binding: 2, ...st('storage') },
     { binding: 3, ...st('storage') }, { binding: 4, ...st('uniform') }, { binding: 5, ...st('storage') },
+    { binding: 6, ...st('storage') }, { binding: 7, ...st('storage') }, { binding: 8, ...st('storage') },
   ] });
   const layout = device.createPipelineLayout({ bindGroupLayouts: [bgl] });
   const pipelines = {};
-  for (const name of ['kickDrift', 'force', 'kick']) {
+  for (const name of ['kickDrift', 'force', 'kick', 'rewind']) {
     pipelines[name] = device.createComputePipeline({ layout, compute: { module, entryPoint: name } });
   }
 
@@ -133,6 +147,9 @@ export function createGpuEngine(device, sim) {
   const velBuf = device.createBuffer({ size: cap * 8, usage });
   const accBuf = device.createBuffer({ size: cap * 8, usage });
   const reactBuf = device.createBuffer({ size: groups * MAX_CORES * 8, usage });
+  const snapBody = device.createBuffer({ size: cap * 16, usage });
+  const snapVel = device.createBuffer({ size: cap * 8, usage });
+  const startBody = device.createBuffer({ size: cap * 16, usage });
   const params = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const coresBuf = device.createBuffer({ size: MAX_CORES * 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const readBody = [0, 1].map(() => device.createBuffer({ size: cap * 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }));
@@ -147,6 +164,9 @@ export function createGpuEngine(device, sim) {
       { binding: 3, resource: { buffer: accBuf } },
       { binding: 4, resource: { buffer: coresBuf } },
       { binding: 5, resource: { buffer: reactBuf } },
+      { binding: 6, resource: { buffer: snapBody } },
+      { binding: 7, resource: { buffer: snapVel } },
+      { binding: 8, resource: { buffer: startBody } },
     ],
   });
 
@@ -166,10 +186,11 @@ export function createGpuEngine(device, sim) {
   const reaction = new Float64Array(MAX_CORES * 2); // latest known star pull on each core
   let flip = 0;
   let primed = false;
+  let rewindS = 0;
 
   const writeParams = () => {
     new Uint32Array(paramData, 0, 2).set([n, sim.k]);
-    new Float32Array(paramData, 8, 7).set([sim.o.dt, sim.o.softening ** 2, 1 - sim.fall, sim.fall * sim.o.fallG, sim.halfH, sim.o.bounce, sim.o.bankDepth]);
+    new Float32Array(paramData, 8, 8).set([sim.o.dt, sim.o.softening ** 2, 1 - sim.fall, sim.fall * sim.o.fallG, sim.halfH, sim.o.bounce, sim.o.bankDepth, rewindS]);
     device.queue.writeBuffer(params, 0, paramData);
   };
   const writeCores = () => {
@@ -220,23 +241,37 @@ export function createGpuEngine(device, sim) {
         primed = true;
       }
       for (let s = 0; s < steps; s++) {
-        coreAccel();
-        sim.driftCores(sim.o.dt);        // cores half-kick + drift, in step with the stars
-        writeParams();
-        writeCores();
         const enc = device.createCommandEncoder();
-        dispatch(enc, 'kickDrift');
-        dispatch(enc, 'force');
-        dispatch(enc, 'kick');
+        if (sim.snapshotRequested) { // the fall begins: keep this state to come back to
+          enc.copyBufferToBuffer(bodyBuf, 0, snapBody, 0, n * 16);
+          enc.copyBufferToBuffer(velBuf, 0, snapVel, 0, n * 8);
+          sim.snapshotRequested = false;
+        }
+        if (sim.rewindRequested) { enc.copyBufferToBuffer(bodyBuf, 0, startBody, 0, n * 16); sim.rewindRequested = false; }
+        if (sim.rewind) {
+          rewindS = sim._rewindProgress();
+          writeParams();
+          dispatch(enc, 'rewind');
+          if (rewindS >= 1) { sim.finishRewind(false); writeCores(); dispatch(enc, 'force'); }
+          sim.time += sim.o.dt;
+        } else {
+          const falling = sim.fall > 0; // the unseen cores hold still while the page falls
+          coreAccel();
+          if (!falling) sim.driftCores(sim.o.dt); // cores half-kick + drift, in step with the stars
+          rewindS = 0;
+          writeParams();
+          writeCores();
+          dispatch(enc, 'kickDrift');
+          dispatch(enc, 'force');
+          dispatch(enc, 'kick');
+        }
         if (s === steps - 1) {
           enc.copyBufferToBuffer(bodyBuf, 0, readBody[flip], 0, n * 16);
           enc.copyBufferToBuffer(velBuf, 0, readVel[flip], 0, n * 8);
           enc.copyBufferToBuffer(reactBuf, 0, readReact[flip], 0, groups * MAX_CORES * 8);
         }
         device.queue.submit([enc.finish()]);
-        coreAccel();
-        sim.kickCores(h);
-        sim.time += sim.o.dt;
+        if (!sim.rewind && !(sim.fall > 0)) { coreAccel(); sim.kickCores(h); }
         sim.stats.steps++;
       }
       const rb = readBody[flip], rv = readVel[flip], rr = readReact[flip];
@@ -253,7 +288,7 @@ export function createGpuEngine(device, sim) {
 
       // housekeeping on the CPU copy: escapes and swallows respawn, then the few changed stars go back up
       for (let i = 0; i < n; i++) { sim.x[i] = positions[4 * i]; sim.y[i] = positions[4 * i + 1]; }
-      const rewritten = sim.cull();
+      const rewritten = sim.rewind ? null : sim.cull();
       if (rewritten) {
         const one = new Float32Array(4), vel = new Float32Array(2);
         for (const i of rewritten) {
@@ -263,13 +298,14 @@ export function createGpuEngine(device, sim) {
           velocities.set(vel, 2 * i);
           device.queue.writeBuffer(bodyBuf, 16 * i, one);
           device.queue.writeBuffer(velBuf, 8 * i, vel);
+          if (sim.snap) { device.queue.writeBuffer(snapBody, 16 * i, one); device.queue.writeBuffer(snapVel, 8 * i, vel); }
         }
       }
       return rewritten;
     },
 
     destroy(keepDevice = false) {
-      for (const b of [bodyBuf, velBuf, accBuf, reactBuf, params, coresBuf, ...readBody, ...readVel, ...readReact]) b.destroy();
+      for (const b of [bodyBuf, velBuf, accBuf, reactBuf, snapBody, snapVel, startBody, params, coresBuf, ...readBody, ...readVel, ...readReact]) b.destroy();
       if (!keepDevice) device.destroy();
     },
   };
