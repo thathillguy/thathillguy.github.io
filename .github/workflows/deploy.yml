@@ -33,9 +33,9 @@ jobs:
       # guarded against the bot's own push, so this cannot loop.
       - name: Publish build to repo root
         run: |
-          rm -rf index.html assets favicon.svg
+          rm -rf index.html assets favicon.svg resume.pdf
           cp -R dist/. .
-          git add -A index.html assets favicon.svg
+          git add -A index.html assets favicon.svg resume.pdf
           if git diff --cached --quiet; then
             echo "root already up to date"
             exit 0
