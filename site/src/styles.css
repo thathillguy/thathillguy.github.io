@@ -18,6 +18,7 @@ body {
 /* Two screens, and the scroll settles on one or the other: the galaxies, or the pool. */
 html {
   scroll-snap-type: y mandatory;
+  scroll-behavior: smooth;
 }
 
 body.pressing {
@@ -62,7 +63,23 @@ body {
 
 .topbar nav {
   display: flex;
+  align-items: center;
   gap: 2px;
+}
+
+.topbar .navlink {
+  width: auto;
+  height: 38px;
+  padding: 0 14px;
+  margin-right: 6px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 15px;
+  letter-spacing: -0.01em;
 }
 
 .topbar nav a {
@@ -103,15 +120,15 @@ body {
   cursor: crosshair;
 }
 
-/* The about card is laid out low on the second screen, where the rising water reaches it, and
-   floats as a boat once it does (NBodyCanvas moves `.boat`; `.boat-slot` keeps its place). */
+/* The about card is laid out on the floor of the second screen, in dry dock, and floats as a
+   boat once the rising water lifts it (NBodyCanvas moves `.boat`; `.boat-slot` keeps its place). */
 .about {
   position: relative;
   height: 100vh;
   height: 100dvh;
   display: flex;
   justify-content: center;
-  padding: 56px 24px 8vh;
+  padding: 56px 24px 0;
   scroll-snap-align: start;
 }
 
@@ -125,8 +142,9 @@ body {
    deck keeps more room on that side. */
 .boat {
   position: relative;
-  padding: 24px 10% 48px 7%;
+  padding: 26px 12% 64px 7%;
   font-size: clamp(16px, 1.3vw, 19px);
+  font-weight: 400;
   line-height: 1.45;
   color: var(--ink);
   transform-origin: 50% 50%;
@@ -142,8 +160,12 @@ body {
     padding: 18px 7% 26px;
     font-size: 15px;
   }
+  .topbar .navlink {
+    padding: 0 10px;
+    margin-right: 2px;
+  }
   .about {
-    padding-bottom: 5vh;
+    padding-top: 56px;
   }
 }
 
@@ -160,15 +182,20 @@ body {
   fill: var(--paper);
   stroke: var(--ink);
   stroke-width: 2;
-  stroke-linejoin: miter;
+  stroke-linejoin: round;
 }
 
+.boat .hull line {
+  stroke: var(--ink);
+  stroke-width: 1.5;
+}
+
+/* the heading is set like the wordmark in the top bar */
 .about h2 {
-  margin: 0 0 1em;
-  font-size: 13px;
+  margin: 0 0 1.1em;
+  font-size: 15px;
   font-weight: 800;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  letter-spacing: -0.01em;
 }
 
 .about p {

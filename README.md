@@ -24,9 +24,11 @@ horizon is drawn; the hole shows only through what it does to the field and the 
   becomes water as it lands: a weakly compressible particle fluid on a grid (deposit, blur,
   pressure, viscosity, walls) that fills the lower 40% of that screen. A drop lands only where
   the water has room, and only with a small chance per substep, because the galaxy cores rain
-  down denser than water and landing a column of them at once burst the pool. The about card
-  is docked low on that screen, sheds the rain off its sides, and is launched as a boat (boat.js)
-  the moment the rising water would lift it. The state is snapshotted as the fall begins and the
+  down denser than water and landing a column of them at once burst the pool. The card sits in
+  dry dock on the floor of that screen, sheds the rain off its sides, and is launched as a boat
+  (boat.js) when the water around it would float it: lifted at a fixed slow rate until a cell of
+  water is under the keel, then left to the pressure field, which lifts the keel only as much as
+  there is water beneath it. The state is snapshotted as the fall begins and the
   same stars stream back to it when you scroll up.
 - `site/src/sim/calibrate.js` times a short run at startup and sizes the star count to the device:
   about 100,000 on a laptop GPU, 15,000 on the CPU path, fewer on weaker hardware.
@@ -39,8 +41,8 @@ horizon is drawn; the hole shows only through what it does to the field and the 
 `?gpu=0` forces the CPU path and `?stars=N` pins the star count. When benchmarking, keep the
 browser window in front; macOS slows a background app's threads several-fold.
 
-The about card's copy is in `site/src/App.jsx`. The resume it links is `site/public/resume.pdf`,
-served at `/resume.pdf`.
+The "My Journey" card's copy is in `site/src/App.jsx` (the code still calls it the about card).
+The resume it links is `site/public/resume.pdf`, served at `/resume.pdf`.
 
 ## Develop
 

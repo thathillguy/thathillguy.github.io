@@ -128,7 +128,7 @@ test('a fall pools the stars as a fluid filling about 40% of the height, and com
   let inside = 0;
   const ys = [];
   for (let i = 0; i < sim.n; i++) {
-    if (Math.abs(sim.x[i]) <= sim.halfW && sim.y[i] <= sim.halfH) inside++;
+    if (Math.abs(sim.x[i]) <= sim.halfW && sim.y[i] <= sim.fluid.floorY) inside++;
     ys.push(sim.y[i]);
   }
   assert.equal(inside, sim.n, 'all stars inside the pool walls');
@@ -154,7 +154,7 @@ test('the about card floats: it settles with roughly its density fraction submer
   const sim = new NBody({ bodies: 12800, random: seeded(9), releaseRate: 1000, screens: 1, halfW: 32, halfH: 14, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
   sim.setFall(1);
   for (let k = 0; k < 60 * 8; k++) sim.step(); // let the drop's sloshing die down first
-  const boat = new Boat({ sigma: 0.42 });
+  const boat = new Boat({ sigma: 0.58 });
   boat.hw = 6; boat.hh = 2.5;
   boat.pin(0, 0); boat.active = true; // just above the water, so the drop is a small splash
   const positions = new Float32Array(sim.cap * 4), velocities = new Float32Array(sim.cap * 2);
@@ -288,7 +288,7 @@ test('on a two-screen page the rain falls out of the first screen and pools at t
   for (let k = 0; k < Math.round(8 / sim.o.dt); k++) sim.step();
   const ys = [];
   let inside = 0;
-  for (let i = 0; i < sim.n; i++) { ys.push(sim.y[i]); if (Math.abs(sim.x[i]) <= sim.halfW && sim.y[i] <= sim.floorY) inside++; }
+  for (let i = 0; i < sim.n; i++) { ys.push(sim.y[i]); if (Math.abs(sim.x[i]) <= sim.halfW && sim.y[i] <= sim.fluid.floorY) inside++; }
   assert.equal(inside, sim.n, 'all stars inside the pool walls');
   ys.sort((a, b) => a - b);
   const surface = ys[Math.floor(0.05 * ys.length)];

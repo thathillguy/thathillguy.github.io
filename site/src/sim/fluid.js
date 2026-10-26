@@ -9,11 +9,11 @@ export const SHED_SPEED = 30;   // sim units/s: rain shed off the card's sides l
 
 /**
  * The ship's profile as fractions of its box (x right, y down), clockwise from the top-left:
- * a flat deck, a bow that rakes forward and rounds down into a flat keel, and a stern with a
- * little rake of its own. Convex. The outline, both fluid solvers and the buoyancy use it.
+ * a flat deck, a long clipper bow that sweeps down into a flat keel, and a raked transom at the
+ * stern. Convex. The outline, both fluid solvers and the buoyancy use it.
  */
 export const HULL_SHAPES = {
-  ship: [[0, 0], [1, 0], [0.985, 0.35], [0.93, 0.68], [0.84, 0.9], [0.72, 1], [0.08, 1], [0, 0.8]],
+  ship: [[0, 0], [1, 0], [0.99, 0.25], [0.965, 0.5], [0.92, 0.72], [0.85, 0.88], [0.75, 0.97], [0.62, 1], [0.1, 1], [0.03, 0.9], [0, 0.72]],
   raft: [[0, 0], [1, 0], [0.97, 1], [0.03, 1]], // a portrait screen gets a tall card: a raft with raked ends, not a squashed ship
 };
 export let HULL_SHAPE = HULL_SHAPES.ship;
@@ -44,6 +44,19 @@ export function hullArea(hw, hh) {
   return Math.abs(a) / 2;
 }
 
+/** The hull's area centroid in local units for a box of half-size (hw, hh): where a uniform hull's weight acts. */
+export function hullCentroid(hw, hh) {
+  let a = 0, cx = 0, cy = 0;
+  const n = HULL_SHAPE.length;
+  for (let k = 0; k < n; k++) {
+    const [u0, v0] = HULL_SHAPE[k], [u1, v1] = HULL_SHAPE[(k + 1) % n];
+    const x0 = (2 * u0 - 1) * hw, y0 = (2 * v0 - 1) * hh, x1 = (2 * u1 - 1) * hw, y1 = (2 * v1 - 1) * hh;
+    const cross = x0 * y1 - x1 * y0;
+    a += cross; cx += (x0 + x1) * cross; cy += (y0 + y1) * cross;
+  }
+  return { x: cx / (3 * a), y: cy / (3 * a) };
+}
+
 /**
  * For a point (lx, ly) in the hull's frame, the distance out through the nearest face and that
  * face's outward normal if the point is inside the hull grown by `margin`; null outside. The
@@ -66,10 +79,14 @@ export function hullPush(lx, ly, hw, hh, margin = 0, shed = false) {
 export function shedScatter(i) { return (Math.imul(i, 2654435761) >>> 0) / 4294967296; }
 
 export const AIR_PRESSURE = 0.01; // as a fraction of K: the top few units of the pool, and everything above it, count as air
-export const LAND_FULL = 1.25;    // a drop lands only where the water is thinner than this (times rest density): the galaxy cores
-                                  // rain down denser than water, and landing all of it at once made the pool burst
-export const LAND_CHANCE = 0.03;  // ...and only this often per substep, so a dense column lands over many steps, each drop
-                                  // falling on through the water until it finds room; the pool has time to spread the arrivals
+export const LAND_ROOM = 0.04;    // a drop lands only where the pressure is under the full pool's hydrostatic pressure at that depth
+                                  // plus this fraction of K (a few units of head): the galaxy cores rain down denser than water, and
+                                  // landing all of it at once made the pool burst; a flat density cap let the floor overfill and threw
+                                  // the boat off it. Pressure, not density: the pool's particle density runs above rest density in
+                                  // ways the smoothing sets, but its pressure is hydrostatic exactly
+export const LAND_CHANCE = 0.003; // ...and only this often per substep in full water (more where the water is thin): a drop sinks on
+                                  // through the pool as rain and lands anywhere in its depth, so the inflow is spread over the whole
+                                  // column (not the top few cells, which pressure could not clear fast enough: that erupted)
 
 export const FLUID = {
   cell: 1.2,        // grid spacing (sim units)
@@ -80,6 +97,8 @@ export const FLUID = {
   bounce: 0.2,      // restitution at the walls and floor
   substeps: 8,      // per simulation step: sqrt(K) * dt / substeps must stay under `cell`
   maxCells: 256,    // per axis
+  sill: 1.5,        // cells of water below the floor the hull rests on (off the bottom edge of the screen), so a
+                    // hull sitting on the bottom has water under its keel to be lifted by
 };
 
 export class Fluid {
@@ -91,13 +110,15 @@ export class Fluid {
 
   /**
    * Size the grid to the world: halfW either side, from the top of the first screen (-halfH) down
-   * to the floor at floorY; and set the rest density so n stars fill `fraction` of one screen's
-   * height (2 halfH) above the floor.
+   * to the water's floor, a sill below floorY (where the hull rests, the bottom of the screen);
+   * and set the rest density so n stars fill `fraction` of one screen's height (2 halfH) above
+   * floorY.
    */
   fit(halfW, halfH, floorY, n, fraction) {
-    const { maxCells } = this.o;
+    const { maxCells, sill } = this.o;
+    const h = Math.max(this.o.cell, (2 * halfW) / (maxCells - 2), (floorY + halfH + sill * this.o.cell) / (maxCells - 2));
+    floorY += sill * h;
     const tall = floorY + halfH;
-    const h = Math.max(this.o.cell, (2 * halfW) / (maxCells - 2), tall / (maxCells - 2));
     const cols = Math.ceil((2 * halfW) / h) + 2, rows = Math.ceil(tall / h) + 2;
     if (cols !== this.cols || rows !== this.rows) {
       this.cols = cols; this.rows = rows;
@@ -112,7 +133,8 @@ export class Fluid {
     this.ox = -halfW - h; this.oy = -halfH - h; // cell (0,0) sits just outside the top-left corner
     this.halfW = halfW; this.halfH = halfH; this.floorY = floorY;
     // stars per cell at rest, lowered a little because the pool compresses under its own weight
-    const depth = fraction * 2 * halfH;
+    const depth = fraction * 2 * halfH + sill * h;
+    this.depth = depth;
     this.rho0 = ((n / (2 * halfW * depth)) * h * h) / (1 + (0.5 * this.o.g * depth) / this.o.K);
   }
 
@@ -268,8 +290,11 @@ export class Fluid {
           if (rain) { shed = true; const sp = SHED_SPEED * (0.2 + 0.8 * shedScatter(i)); u += wnx * sp; v += wny * sp; }
         }
       }
-      if (rain && !shed && cnt < LAND_FULL * rho0 && (cnt > 0.5 * rho0 || py > floor - h) // into water with room in it, or onto the floor
-          && (shedScatter(i) + roll) % 1 < LAND_CHANCE) {
+      // into water with room in it, or onto the floor: room is measured against the full pool's hydrostatic pressure at this
+      // depth, and thin water (the first of the pool, the surface) takes drops readily
+      const room = g * Math.min(Math.max(py - (floor - this.depth), 0), this.depth) + K * LAND_ROOM;
+      if (rain && !shed && pl < room && (cnt > 0.5 * rho0 || py > floor - h)
+          && (shedScatter(i) + roll) % 1 < LAND_CHANCE * (1 + 12 * Math.max(0, 1 - cnt / rho0))) {
         landed[i] = 1;
         if (cnt > 1e-6) { u = su / cnt + 0.3 * (u - su / cnt); v = sv / cnt + 0.3 * (v - sv / cnt); } // a drop joins the water: most of its fall is spent
       }

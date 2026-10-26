@@ -58,7 +58,7 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
       sim = driver.sim;
       if (device) { engine = createGpuEngine(device, sim); driver.useGpu(engine); }
       driver.probe = probe;
-      window.__nbody = driver; // handy in the console
+      window.__nbody = driver; driver.boat = boat; // handy in the console
     });
 
     const einsteinRadius = () => Math.sqrt(2 * (sim?.holeRadius ?? 1.4) * LENS_DISTANCE) * pxPerUnit; // CSS px

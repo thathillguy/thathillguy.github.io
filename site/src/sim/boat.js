@@ -3,11 +3,13 @@
 // the water under it is compressed and settles when it is not; drag toward the water's motion;
 // gravity. The fluid treats the hull as a solid wall (fluid.js and gpu.js). Units are the
 // simulation's; y points down.
-import { hullEdges, hullArea } from './fluid.js';
+import { hullEdges, hullArea, hullCentroid, HULL_MARGIN } from './fluid.js';
+
+const LAUNCH_SPEED = 3; // sim units/s: how fast the card leaves the dock
 
 export class Boat {
   constructor(o = {}) {
-    this.sigma = o.sigma ?? 0.42;  // density relative to the fluid: the fraction of the height submerged at rest
+    this.sigma = o.sigma ?? 0.58;  // density relative to the fluid: the fraction of the height submerged at rest
     this.drag = o.drag ?? 2.5;     // 1/s, toward the water's velocity, along
     this.heave = o.heave ?? 6;     // 1/s, up and down: water resists a hull bobbing far more than sliding
     this.spin = o.spin ?? 6.0;     // 1/s, angular damping
@@ -20,11 +22,12 @@ export class Boat {
     this.top = -Infinity;          // world y of the top of the view the card lives on
     this.active = false;
     this.held = false;             // docked where the page laid it out until the water can carry it (see step)
+    this.launch = false;           // leaving the dock: lifted at LAUNCH_SPEED until a cell of water is under the keel
     this.wet = 0;                  // fraction of the hull's faces under pressure, for inspection
   }
 
   /** Hold the hull at (x, y), level and still. */
-  pin(x, y) { this.x = x; this.y = y; this.vx = this.vy = this.th = this.om = 0; this.active = false; }
+  pin(x, y) { this.x = x; this.y = y; this.vx = this.vy = this.th = this.om = 0; this.active = false; this.held = this.launch = false; }
 
   /** Ease toward (x, y, level) when the water is gone, by `k` of the way. */
   easeTo(x, y, k) { this.x += (x - this.x) * k; this.y += (y - this.y) * k; this.th += (0 - this.th) * k; this.vx = this.vy = this.om = 0; }
@@ -43,22 +46,44 @@ export class Boat {
     const ext = Math.abs(c) * hw + Math.abs(s) * hh;
     const W = 2 * hw;
 
+    // the water just below the hull: its motion, for drag; and how much of it there is in the
+    // thin layer right under the keel (between the hull's margin and half a cell further). The
+    // pressure grid cannot see a gap thinner than a cell, so a hull resting on the floor would
+    // read the full hydrostatic lift under its keel and leap, and the water would jet in beneath
+    // it. The keel's lift is scaled by how full that layer is: the hull can rise only as fast as
+    // water flows in under it, which is the suction a flat bottom really feels.
+    let fvx = 0, fvy = 0, fn = 0, fk = 0;
+    const lo = x - ext - 1, hi = x + ext + 1;
+    const kTop = hh + HULL_MARGIN, kBot = kTop + 0.5 * fluid.h, kHalf = 0.9 * hw;
+    for (let i = 0, k = 0; i < n; i++, k += 4) {
+      const px = positions[k];
+      if (px < lo || px > hi) continue;
+      const dx = px - x, dy = positions[k + 1] - y;
+      const lx = c * dx + s * dy, ly = -s * dx + c * dy;
+      if (Math.abs(lx) < hw + 1 && ly > hh - 1 && ly < hh + 6) { fvx += velocities[2 * i]; fvy += velocities[2 * i + 1]; fn++; }
+      if (Math.abs(lx) < kHalf && ly > kTop && ly < kBot) fk++;
+    }
+    const fitted = fluid.cols > 1 && fluid.rows > 1 && pressure.length >= fluid.cols * fluid.rows;
+    const fill = fitted ? Math.min(1, fk / ((2 * kHalf * (kBot - kTop) * fluid.rho0) / (fluid.h * fluid.h))) : 0;
+    this.fill = fill;
+
     // pressure on every face but the deck, sampled a little outside each face. Before the grid's
     // first fit (a scroll can release the boat between a tick and this call) there is no field
     // to sample yet: the boat simply falls for that frame.
-    const fitted = fluid.cols > 1 && fluid.rows > 1 && pressure.length >= fluid.cols * fluid.rows;
     const A = hullArea(hw, hh), out = 0.8 * fluid.h;
-    let fx = 0, fy = 0, tq = 0, wet = 0, total = 0;
+    let fx = 0, fy = 0, fyFull = 0, tq = 0, wet = 0, total = 0; // fyFull: the lift with the keel counted in full, for the launch decision
     for (const e of fitted ? hullEdges(hw, hh) : []) {
       if (e.ny < -0.9) continue; // the deck
+      const scale = e.ny > 0.7 ? fill : 1; // the keel: only as much lift as there is water under it
       const N = Math.max(2, Math.round(e.len / (W / 16))), ds = e.len / N;
       const wnx = c * e.nx - s * e.ny, wny = s * e.nx + c * e.ny;   // world normal (outward)
       for (let i = 0; i < N; i++) {
         const t = (i + 0.5) / N;
         const lx = e.x0 + (e.x1 - e.x0) * t, ly = e.y0 + (e.y1 - e.y0) * t;
         const wx = x + c * lx - s * ly, wy = y + s * lx + c * ly;   // world point on the face
-        const P = Math.max(0, fluid.pressureAt(pressure, wx + wnx * out, wy + wny * out));
+        const P0 = Math.max(0, fluid.pressureAt(pressure, wx + wnx * out, wy + wny * out)), P = P0 * scale;
         total += ds;
+        fyFull -= P0 * wny * ds;
         if (P <= 0) continue;
         const dfx = -P * wnx * ds, dfy = -P * wny * ds;
         fx += dfx; fy += dfy;
@@ -68,17 +93,6 @@ export class Boat {
     }
     this.wet = total > 0 ? wet / total : 0;
 
-    // the water's motion just below the hull, for drag
-    let fvx = 0, fvy = 0, fn = 0;
-    const lo = x - ext - 1, hi = x + ext + 1;
-    for (let i = 0, k = 0; i < n; i++, k += 4) {
-      const px = positions[k];
-      if (px < lo || px > hi) continue;
-      const dx = px - x, dy = positions[k + 1] - y;
-      const lx = c * dx + s * dy, ly = -s * dx + c * dy;
-      if (Math.abs(lx) < hw + 1 && ly > hh - 1 && ly < hh + 6) { fvx += velocities[2 * i]; fvy += velocities[2 * i + 1]; fn++; }
-    }
-
     const m = this.sigma * A, H = 2 * hh, I = (m * (W * W + H * H)) / 12;
     if (!(m > 0) || !Number.isFinite(fx + fy + tq)) { // no hull yet, or a bad pressure sample: fall freely
       if (!Number.isFinite(fx + fy + tq)) console.warn('boat: non-finite pressure force', { fx, fy, tq, wet, cols: fluid.cols, rows: fluid.rows, h: fluid.h });
@@ -86,6 +100,10 @@ export class Boat {
       this.vy += g * dt; this.y += this.vy * dt;
       return;
     }
+    // the hull's weight acts at its centroid, not the box's centre: a bow cut away aft of it
+    // would otherwise trim the whole card down by the bow
+    const cg = hullCentroid(hw, hh);
+    tq += (c * cg.x - s * cg.y) * m * g;
     let ax = fx / m, ay = fy / m + g, al = tq / I;
     if (this.wet > 0) {
       const f = Math.min(1, 2 * this.wet);
@@ -94,17 +112,24 @@ export class Boat {
       al -= f * this.spin * this.om;
       if (this.moorX != null) ax -= this.moor * (x - this.moorX);
     } else al -= 0.3 * this.om;
-    // held: the page keeps the card where it laid it out until the rising water would lift it,
-    // so it is launched with no net force rather than dropped into the pool (a slap that flung
-    // thousands of stars)
-    if (this.held) { if (ay >= 0) return; this.held = false; }
+    // held: the page keeps the card where it laid it out until the water around it would float
+    // it (the hydrostatic lift, keel in full). Then it leaves the dock at a fixed slow rate until
+    // a cell of water is under the keel and the pressure field can carry it: a flat bottom coming
+    // off the floor any faster has water jetting in beneath it, and an outright drop into the
+    // pool was a slap that flung thousands of stars.
+    const ey = Math.abs(s) * hw + Math.abs(c) * hh;
+    if (this.held) { if (fyFull / m + g >= 0) return; this.held = false; this.launch = true; }
+    if (this.launch) {
+      this.vx = this.om = 0; this.vy = -LAUNCH_SPEED; this.y += this.vy * dt;
+      if (floorY - (this.y + ey) >= fluid.h) this.launch = false;
+      return;
+    }
     this.vx += ax * dt; this.vy += ay * dt; this.om += al * dt;
     this.x += this.vx * dt; this.y += this.vy * dt; this.th += this.om * dt;
     const lim = this.maxTilt;
     if (this.th > lim) { this.th = lim; this.om = Math.min(this.om, 0); }
     if (this.th < -lim) { this.th = -lim; this.om = Math.max(this.om, 0); }
     // walls, floor, and the top of the view as a soft ceiling
-    const ey = Math.abs(s) * hw + Math.abs(c) * hh;
     if (this.x - ext < -halfW) { this.x = -halfW + ext; this.vx = Math.abs(this.vx) * 0.3; }
     if (this.x + ext > halfW) { this.x = halfW - ext; this.vx = -Math.abs(this.vx) * 0.3; }
     if (this.y + ey > floorY) { this.y = floorY - ey; this.vy = -Math.abs(this.vy) * 0.2; this.om *= 0.5; }

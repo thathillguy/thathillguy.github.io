@@ -4,7 +4,7 @@
 //
 // Body layout, shared with the renderer: vec4 (x, y, mass, radius) per star.
 
-import { HULL_MARGIN, HULL_SHAPE, AIR_PRESSURE, LAND_FULL, LAND_CHANCE, SHED_SPEED } from './fluid.js';
+import { HULL_MARGIN, HULL_SHAPE, AIR_PRESSURE, LAND_ROOM, LAND_CHANCE, SHED_SPEED } from './fluid.js';
 
 const WG = 256;
 const MAX_CORES = 4;
@@ -148,7 +148,7 @@ struct FParams {
   ix: f32, iy: f32, ir: f32, ia: f32,
   sx: f32, sy: f32, svx: f32, svy: f32,
   sr: f32, sb: f32, hasStir: f32, release: f32,
-  airDrag: f32, pad1: f32, pad2: f32, pad3: f32,
+  airDrag: f32, depth: f32, pad2: f32, pad3: f32,
 }
 // the ship's profile, as fractions of its box (HULL_SHAPE in fluid.js)
 const SHAPE = array<vec2<f32>, ${HULL_SHAPE.length}>(${HULL_SHAPE.map(([u, v]) => `vec2<f32>(${u.toFixed(3)}, ${v.toFixed(3)})`).join(', ')});
@@ -335,7 +335,10 @@ fn fluid(@builtin(global_invocation_id) gid: vec3<u32>) {
   if (rain) {
     let c = (st >> 1u) + 1u; // this drop's substeps so far: its landing rolls run through a golden-ratio sequence
     let roll = fract(f32(i * 2654435761u) / 4294967296.0 + f32(c) * 0.6180339887);
-    if (!shed && cnt < ${LAND_FULL} * q.rho0 * FP && (cnt > 0.5 * q.rho0 * FP || np.y > floor - q.h) && roll < ${LAND_CHANCE}) { // into water with room in it, or onto the floor
+    // into water with room in it, or onto the floor (see Fluid.substep)
+    let room = q.g * clamp(np.y - (floor - q.depth), 0.0, q.depth) + q.K * ${LAND_ROOM};
+    let chance = ${LAND_CHANCE} * (1.0 + 12.0 * max(0.0, 1.0 - cnt / (q.rho0 * FP)));
+    if (!shed && pl < room && (cnt > 0.5 * q.rho0 * FP || np.y > floor - q.h) && roll < chance) {
       landed[i] = 1u;
       if (cnt > 1e-3) { let m = su / cnt; v = m + 0.3 * (v - m); } // a drop joins the water: most of its fall is spent
     } else { landed[i] = c << 1u; }
@@ -455,12 +458,12 @@ export function createGpuEngine(device, sim) {
     new Uint32Array(fdata, 0, 4).set([n, f.cols, f.rows, f.cols * f.rows]);
     const im = sim.pending, st = sim.stir;
     new Float32Array(fdata, 16, 44).set([
-      f.h, f.ox, f.oy, f.rho0, o.K, o.cohesion, o.visc, o.g, sim.fall, sim.o.dt / o.substeps, sim.halfW, sim.floorY, o.bounce,
+      f.h, f.ox, f.oy, f.rho0, o.K, o.cohesion, o.visc, o.g, sim.fall, sim.o.dt / o.substeps, sim.halfW, f.floorY, o.bounce,
       hole == null ? 0 : sim.cx[hole], hole == null ? 0 : sim.cy[hole], hole == null ? 0 : sim.cm[hole], hole == null ? 1 : sim.ce2[hole], useAcc ? 1 : 0,
       b ? b.x : 0, b ? b.y : 0, b ? b.c : 1, b ? b.s : 0, b ? b.hw : 0, b ? b.hh : 0, b ? b.vx : 0, b ? b.vy : 0, b ? 1 : 0, HULL_MARGIN,
       im ? im.x : 0, im ? im.y : 0, im ? im.r : 0, im ? im.a : 0,
       st ? st.x : 0, st ? st.y : 0, st ? st.vx : 0, st ? st.vy : 0, sim.o.stirRadius, sim.o.stirBlend, st ? 1 : 0, sim.release,
-      sim.airDrag, 0, 0, 0,
+      sim.airDrag, f.depth, 0, 0,
     ]);
     device.queue.writeBuffer(fparams, 0, fdata);
   };

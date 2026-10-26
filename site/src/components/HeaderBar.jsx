@@ -12,7 +12,8 @@ export default function HeaderBar() {
   return (
     <header className="topbar">
       <a className="wordmark" href="/">Robert Hill</a>
-      <nav aria-label="Profiles">
+      <nav aria-label="Site">
+        <a className="navlink" href="#journey">My Journey</a>
         {LINKS.map(({ href, icon, label }) => (
           <a key={href} href={href} aria-label={label} title={label} rel="me noopener">
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
