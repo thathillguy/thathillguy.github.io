@@ -1,23 +1,29 @@
 import { useEffect, useRef } from 'react';
 import { Driver } from '../sim/driver.js';
 import { probeGpu, createGpuEngine } from '../sim/gpu.js';
+import { calibrateGpu, calibrateCpu } from '../sim/calibrate.js';
 import { createDiscRenderer } from '../render/discs.js';
+import { createTextWarp } from '../render/warp.js';
 
 const UNITS = 100;          // the shorter side of the canvas spans this many sim units
 const BUDGET = 10;          // ms of physics per frame before the timestep coarsens
 const TIME_SCALE = 0.5;     // sim seconds per real second
-const LENS_DISTANCE = 6.3;  // effective lens-to-source distance: rE = sqrt(2 rs D)
-const EASE_IN = 0.16, EASE_OUT = 0.24; // seconds for the hole's lens to appear and fade
+const LENS_DISTANCE = 20;   // effective lens-to-source distance: rE = sqrt(2 rs D)
+const EASE_IN = 0.16, EASE_OUT = 0.24; // seconds for the warp to appear and fade
 
-export default function NBodyCanvas({ starsGpu, starsCpu, gpu = true }) {
+/**
+ * The simulation canvas. Sizes itself to the device at startup (see calibrate.js) unless `stars`
+ * is given. `warpTarget` is an element (the name card) to bend along with the field.
+ */
+export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null }) {
   const canvasRef = useRef(null);
-  const labelRef = useRef(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const label = labelRef.current;
     const renderer = createDiscRenderer(canvas);
+    const warp = warpTarget?.current ? createTextWarp(warpTarget.current) : null;
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const small = Math.min(window.innerWidth, window.innerHeight) < 700;
 
     let width = 1, height = 1, dpr = 1, pxPerUnit = 1;
     const measure = () => {
@@ -29,27 +35,35 @@ export default function NBodyCanvas({ starsGpu, starsCpu, gpu = true }) {
     };
     measure();
 
-    // Find out whether there is a GPU before deciding how many stars to make.
+    // Find the GPU, time it (or the CPU), then make as many stars as the device carries.
     let driver = null, sim = null, engine = null, disposed = false;
-    const ready = (gpu ? probeGpu() : Promise.resolve(null)).then((device) => {
+    const ready = (gpu ? probeGpu() : Promise.resolve(null)).then(async (device) => {
+      let bodies = stars, probe = null;
+      if (!bodies) {
+        const limit = small ? 60000 : undefined;
+        ({ bodies, probe } = device ? await calibrateGpu(device, { limit }) : calibrateCpu({ limit: small ? 8000 : undefined }));
+      }
       if (disposed) { device?.destroy(); return; }
-      driver = new Driver({ bodies: device ? starsGpu : starsCpu, prime: !device, timeScale: TIME_SCALE, halfW: width / 2 / pxPerUnit, halfH: height / 2 / pxPerUnit });
+      driver = new Driver({ bodies, prime: !device, timeScale: TIME_SCALE, halfW: width / 2 / pxPerUnit, halfH: height / 2 / pxPerUnit });
       sim = driver.sim;
       if (device) { engine = createGpuEngine(device, sim); driver.useGpu(engine); }
+      driver.probe = probe;
       window.__nbody = driver; // handy in the console
     });
 
+    const einsteinRadius = () => Math.sqrt(2 * (sim?.holeRadius ?? 1.4) * LENS_DISTANCE) * pxPerUnit; // CSS px
     const fit = () => {
       measure();
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       renderer.resize(canvas.width, canvas.height, pxPerUnit * dpr);
       sim?.setViewport(width / 2 / pxPerUnit, height / 2 / pxPerUnit);
+      warp?.resize(einsteinRadius(), dpr);
     };
     fit();
-    ready.then(() => sim?.setViewport(width / 2 / pxPerUnit, height / 2 / pxPerUnit));
+    ready.then(() => { sim?.setViewport(width / 2 / pxPerUnit, height / 2 / pxPerUnit); warp?.resize(einsteinRadius(), dpr); });
 
-    // The pointer's black hole: its lens eases in while held and out after release.
+    // The pointer's hole: its warp eases in while held and out after release.
     const lensState = { x: 0, y: 0, k: 0, target: 0 };
     let uploadedState = -1;
     const draw = (dt, now) => {
@@ -57,8 +71,8 @@ export default function NBodyCanvas({ starsGpu, starsCpu, gpu = true }) {
       const rate = lensState.target > lensState.k ? dt / EASE_IN : dt / EASE_OUT;
       lensState.k += Math.max(-rate, Math.min(rate, lensState.target - lensState.k));
       const ease = lensState.k * lensState.k * (3 - 2 * lensState.k);
-      const rs = sim.holeRadius;
-      renderer.lens(lensState.x * dpr, lensState.y * dpr, Math.sqrt(2 * rs * LENS_DISTANCE) * pxPerUnit * dpr, rs * pxPerUnit * dpr, ease);
+      renderer.lens(lensState.x * dpr, lensState.y * dpr, einsteinRadius() * dpr, ease);
+      warp?.set(lensState.cx, lensState.cy, ease);
       // upload a physics state once, then move the stars on along their velocities each frame
       const fresh = driver.stateAt !== uploadedState;
       uploadedState = driver.stateAt;
@@ -88,18 +102,15 @@ export default function NBodyCanvas({ starsGpu, starsCpu, gpu = true }) {
       const rect = canvas.getBoundingClientRect();
       const px = e.clientX - rect.left, py = e.clientY - rect.top;
       sim.setHole((px - width / 2) / pxPerUnit, (py - height / 2) / pxPerUnit);
-      lensState.x = px;
-      lensState.y = py;
-      label.style.transform = `translate(${px + 18}px, ${py - 34}px)`;
+      lensState.x = px; lensState.y = py;
+      lensState.cx = e.clientX; lensState.cy = e.clientY;
     };
     const onDown = (e) => {
       if ((e.button !== undefined && e.button !== 0) || pointerId !== null || !sim) return;
       pointerId = e.pointerId;
-      canvas.setPointerCapture(e.pointerId);
+      try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic or already-released pointer */ }
       lensState.target = 1;
-      label.textContent = `M = ${sim.o.holeMass.toLocaleString()}  ·  rₛ = ${sim.holeRadius.toFixed(2)}  ·  c = ${sim.o.lightSpeed}`;
       place(e);
-      label.classList.add('on');
     };
     const onMove = (e) => { if (e.pointerId === pointerId) place(e); };
     const onUp = (e) => {
@@ -107,7 +118,6 @@ export default function NBodyCanvas({ starsGpu, starsCpu, gpu = true }) {
       pointerId = null;
       sim?.clearHole();
       lensState.target = 0;
-      label.classList.remove('on');
     };
     canvas.addEventListener('pointerdown', onDown);
     canvas.addEventListener('pointermove', onMove);
@@ -129,14 +139,10 @@ export default function NBodyCanvas({ starsGpu, starsCpu, gpu = true }) {
       canvas.removeEventListener('pointercancel', onUp);
       disposed = true;
       engine?.destroy();
+      warp?.dispose();
       renderer.dispose();
     };
-  }, [starsGpu, starsCpu, gpu]);
+  }, [stars, gpu, warpTarget]);
 
-  return (
-    <>
-      <canvas ref={canvasRef} className="nbody" aria-label="Gravity simulation of two colliding nebulae. Press and hold to place a black hole." />
-      <div ref={labelRef} className="hole-label" aria-hidden="true" />
-    </>
-  );
+  return <canvas ref={canvasRef} className="nbody" aria-label="Gravity simulation of two colliding nebulae. Press and hold to place a black hole." />;
 }

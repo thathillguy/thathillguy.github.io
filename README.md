@@ -7,20 +7,24 @@ an eccentric orbit about each other and swing through one another, throwing out 
 star attracts every other under softened Newtonian gravity; the cores are integrated exactly.
 Stars are collisionless, as stars are: their drawn size is a symbol, their real radius is
 negligible next to their spacing. Press and hold anywhere to put a black hole under the pointer:
-it pulls on everything, swallows what crosses its Schwarzschild radius, and lenses the scene.
+it pulls on everything, swallows what crosses its Schwarzschild radius, and bends the view. No
+horizon is drawn; the hole shows only through what it does to the field and the name card.
 
 - `site/src/sim/nbody.js` is the reference simulation: setup, the cores, a Barnes-Hut quadtree
   for the star-star forces, housekeeping. No DOM or React; tested with `node --test`, including
   a check of the tree's accelerations against the exact all-pairs result.
 - `site/src/sim/gpu.js` runs the stars on the GPU where WebGPU exists: all-pairs gravity in a
-  compute shader, integration on the device, positions read back once per frame. The page then
-  starts with 100,000 stars; without WebGPU it falls back to the CPU tree with 15,000.
+  compute shader, integration on the device, positions read back once per frame. Without WebGPU
+  it falls back to the CPU tree.
+- `site/src/sim/calibrate.js` times a short run at startup and sizes the star count to the device:
+  about 100,000 on a laptop GPU, 15,000 on the CPU path, fewer on weaker hardware.
 - `site/src/sim/driver.js` keeps the sim real-time within a per-frame budget by adapting the
   timestep between 120 and 30 steps per second.
 - `site/src/render/discs.js` draws the stars with WebGL2 instancing and multiplicative blending,
-  so where they overlap the colour deepens like ink on paper, then applies the lensing pass.
+  so where they overlap the colour deepens like ink on paper, then applies the lens pass.
+  `site/src/render/warp.js` bends the name card with the same field through an SVG filter.
 
-`?gpu=0` forces the CPU path. When benchmarking, keep the browser window in front; macOS slows a
+`?gpu=0` forces the CPU path and `?stars=N` pins the star count. When benchmarking, keep the browser window in front; macOS slows a
 background app's threads several-fold.
 
 ## Develop

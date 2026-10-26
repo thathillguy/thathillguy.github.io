@@ -62,8 +62,10 @@ void main() {
   gl_Position = vec4(a_corner, 0.0, 1.0);
 }`;
 
-// Thin-lens bending around the hole: a pixel at p shows the source at p - d_hat * rE^2 / r.
-// The Einstein radius rE maps the hole's centre onto a ring; inside it the image inverts.
+// Bends the frame around the pointer's hole: a pixel at p shows the source at p - d_hat * a(r),
+// with a(r) the softened thin-lens deflection rE^2 r / (r^2 + rc^2), windowed to nothing at rMax so
+// the warp has an edge. Inside the Einstein radius the image turns inside out, as a real lens does.
+// No horizon is drawn: the hole is only visible through what it does to the field.
 const LENS_FS = `#version 300 es
 precision highp float;
 in vec2 v_uv;
@@ -71,7 +73,6 @@ uniform sampler2D u_scene;
 uniform vec2 u_res;
 uniform vec2 u_hole;
 uniform float u_rE;
-uniform float u_rH;
 uniform float u_k;
 out vec4 o;
 void main() {
@@ -79,19 +80,12 @@ void main() {
   vec2 p = v_uv * u_res;
   vec2 d = p - u_hole;
   float r = max(length(d), 1e-3);
-  float rE = u_rE * u_k;
-  float rH = u_rH * u_k;
-  vec2 src = p - d / r * (rE * rE / r);
+  float rc = 0.45 * u_rE, rMax = 3.2 * u_rE;
+  float window = 1.0 - smoothstep(0.55 * rMax, rMax, r);
+  float a = u_k * u_rE * u_rE * r / (r * r + rc * rc) * window;
+  vec2 src = p - d / r * a;
   vec3 col = texture(u_scene, src / u_res).rgb;
   if (any(lessThan(src, vec2(0.0))) || any(greaterThan(src, u_res))) col = vec3(1.0);
-  float ring = exp(-pow((r - rE) / (0.10 * rE + 0.6), 2.0)) * 0.28 * u_k;
-  col = mix(col, vec3(0.0), ring);
-  float halo = exp(-r / (rE * 1.6)) * 0.10 * u_k;
-  col = mix(col, vec3(0.0), halo);
-  float photon = exp(-pow((r - 1.5 * rH) / (0.35 + 0.05 * rH), 2.0)) * 0.55 * u_k;
-  col = mix(col, vec3(0.0), photon);
-  float core = 1.0 - smoothstep(rH * 0.92, rH * 1.08, r);
-  col = mix(col, vec3(0.0), core);
   o = vec4(col, 1.0);
 }`;
 
@@ -155,7 +149,7 @@ function createWebGL(canvas) {
   const lu = {
     scene: gl.getUniformLocation(lensProg, 'u_scene'), res: gl.getUniformLocation(lensProg, 'u_res'),
     hole: gl.getUniformLocation(lensProg, 'u_hole'), rE: gl.getUniformLocation(lensProg, 'u_rE'),
-    rH: gl.getUniformLocation(lensProg, 'u_rH'), k: gl.getUniformLocation(lensProg, 'u_k'),
+    k: gl.getUniformLocation(lensProg, 'u_k'),
   };
   gl.uniform1i(lu.scene, 0);
   const lensVao = gl.createVertexArray();
@@ -177,7 +171,7 @@ function createWebGL(canvas) {
   gl.clearColor(1, 1, 1, 1);
 
   let width = 1, height = 1;
-  const lens = { x: 0, y: 0, rE: 0, rH: 0, k: 0 };
+  const lens = { x: 0, y: 0, rE: 0, k: 0 };
 
   return {
     kind: 'webgl2',
@@ -220,11 +214,11 @@ function createWebGL(canvas) {
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.uniform2f(lu.hole, lens.x, height - lens.y);
-      gl.uniform1f(lu.rE, lens.rE); gl.uniform1f(lu.rH, lens.rH); gl.uniform1f(lu.k, lens.k);
+      gl.uniform1f(lu.rE, lens.rE); gl.uniform1f(lu.k, lens.k);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     },
-    /** Lens the frame around (x, y) in device pixels, y down; k in 0..1 is the strength. */
-    lens(x, y, rE, rH, k) { lens.x = x; lens.y = y; lens.rE = rE; lens.rH = rH; lens.k = k; },
+    /** Warp the frame around (x, y) in device pixels, y down, with Einstein radius rE; k in 0..1 is the strength. */
+    lens(x, y, rE, k) { lens.x = x; lens.y = y; lens.rE = rE; lens.k = k; },
     dispose() {
       // keep the context (a canvas can only hand out one kind); free what we made
       gl.deleteProgram(discProg); gl.deleteProgram(lensProg);
@@ -239,7 +233,6 @@ function create2D(canvas) {
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('canvas has no usable rendering context');
   let width = 1, height = 1, ppu = 1, cols = null, pos = null;
-  const lens = { x: 0, y: 0, rH: 0, k: 0 };
   const TAU = Math.PI * 2;
   return {
     kind: '2d',
@@ -257,9 +250,8 @@ function create2D(canvas) {
         ctx.fillStyle = PALETTE[cols ? cols[i] | 0 : 0];
         ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
       }
-      if (lens.k > 0) { ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(lens.x, lens.y, lens.rH * lens.k, 0, TAU); ctx.fill(); }
     },
-    lens(x, y, rE, rH, k) { lens.x = x; lens.y = y; lens.rH = rH; lens.k = k; },
+    lens() {}, // the 2D fallback cannot warp; the hole shows only through the stars
     dispose() {},
   };
 }

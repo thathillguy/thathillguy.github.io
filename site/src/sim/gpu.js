@@ -259,9 +259,9 @@ export function createGpuEngine(device, sim) {
       return rewritten;
     },
 
-    destroy() {
+    destroy(keepDevice = false) {
       for (const b of [bodyBuf, velBuf, accBuf, reactBuf, params, coresBuf, ...readBody, ...readVel, ...readReact]) b.destroy();
-      device.destroy();
+      if (!keepDevice) device.destroy();
     },
   };
 }

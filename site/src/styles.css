@@ -94,29 +94,8 @@ body {
 
 
 /* Black hole readout, next to the pointer while holding */
-.hole-label {
-  position: absolute;
-  top: 0;
-  left: 0;
-  padding: 3px 7px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.8);
-  color: #333;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.18s ease;
-}
-
-.hole-label.on {
-  opacity: 1;
-}
-
 /* Name card. Drawn in white and blended with "difference": black over the white field, white
-   over a black hole, so it stays legible wherever the simulation goes. */
+   over anything dark, so it stays legible wherever the simulation goes. */
 .hero {
   position: absolute;
   top: 13%;

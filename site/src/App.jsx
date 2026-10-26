@@ -1,21 +1,21 @@
+import { useRef } from 'react';
 import HeaderBar from './components/HeaderBar.jsx';
 import NBodyCanvas from './components/NBodyCanvas.jsx';
 import Typewriter from './components/Typewriter.jsx';
 
-// How many stars: the GPU carries far more than the CPU fallback; small or weak devices get fewer.
-const small = Math.min(window.innerWidth, window.innerHeight) < 700;
-const weak = (navigator.hardwareConcurrency || 4) <= 4;
-const STARS_GPU = small ? 30000 : 100000;
-const STARS_CPU = small || weak ? 6000 : 15000;
+// The star count is measured at startup; `?stars=N` pins it and `?gpu=0` forces the CPU path.
+const query = new URLSearchParams(window.location.search);
+const STARS = Math.max(0, parseInt(query.get('stars') || '0', 10) || 0);
+const GPU = query.get('gpu') !== '0';
 
 export default function App() {
-  const gpu = new URLSearchParams(window.location.search).get('gpu') !== '0';
+  const hero = useRef(null);
   return (
     <>
       <HeaderBar />
       <main className="intro">
-        <NBodyCanvas starsGpu={STARS_GPU} starsCpu={STARS_CPU} gpu={gpu} />
-        <div className="hero">
+        <NBodyCanvas stars={STARS} gpu={GPU} warpTarget={hero} />
+        <div ref={hero} className="hero">
           <h1>Robert Hill</h1>
           <Typewriter />
         </div>
