@@ -26,12 +26,12 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
     const canvas = canvasRef.current;
     const renderer = createDiscRenderer(canvas);
     const warp = warpTarget?.current ? createTextWarp(warpTarget.current) : null;
-    const boatEl = boatTarget?.current || null; // the about card; its parent is the slot it is laid out in
+    const portrait = window.innerWidth < 0.8 * window.innerHeight; // a phone: no card and no hull, the text sits on the field (see styles.css)
+    const boatEl = portrait ? null : boatTarget?.current || null; // the about card; its parent is the slot it is laid out in
     const boat = new Boat();
     let boatReturning = false;
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const small = Math.min(window.innerWidth, window.innerHeight) < 700;
-    const portrait = window.innerWidth < 0.8 * window.innerHeight; // a phone: the card is a pier near the top and the pool is shallower (see styles.css)
 
     let width = 1, height = 1, dpr = 1, pxPerUnit = 1;
     const measure = () => {
@@ -131,6 +131,39 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
       boatEl.style.transform = `translate3d(${((bx - tx) * pxPerUnit).toFixed(2)}px, ${((by - ty) * pxPerUnit).toFixed(2)}px, 0) rotate(${th.toFixed(4)}rad)`;
     };
 
+    // On a phone, which way the water falls follows the phone's tilt: gravity's part in the
+    // screen's plane, from the motion sensor, smoothed. iOS hands out the sensor only after a
+    // request made from a tap, so the first tap asks. Flat on a table there is no tilt to
+    // follow, and the water keeps falling down the screen.
+    const tilt = { x: 0, y: 1, on: false };
+    const onMotion = (e) => {
+      const a = e.accelerationIncludingGravity;
+      if (!a || a.x == null || a.y == null) return;
+      // the sensor reports the support (minus gravity) in device axes (x right, y up the screen); turn it
+      // by the screen's orientation so it is in the screen's frame, then screen-down is (-x, y)
+      const ang = ((screen.orientation?.angle ?? window.orientation ?? 0) * Math.PI) / 180;
+      const ca = Math.cos(ang), sa = Math.sin(ang);
+      const sx = a.x * ca + a.y * sa, sy = -a.x * sa + a.y * ca;
+      let dx = -sx / 9.81, dy = sy / 9.81;
+      const inPlane = Math.hypot(dx, dy);
+      if (inPlane < 0.25) { dx = 0; dy = 1; } // flat: the screen's down
+      else { dx /= inPlane; dy /= inPlane; }
+      tilt.x += (dx - tilt.x) * 0.15; tilt.y += (dy - tilt.y) * 0.15;
+      tilt.on = true;
+    };
+    const enableTilt = async () => {
+      if (!portrait || typeof DeviceMotionEvent === 'undefined') return;
+      try {
+        if (typeof DeviceMotionEvent.requestPermission === 'function' && (await DeviceMotionEvent.requestPermission()) !== 'granted') return;
+      } catch { return; }
+      window.addEventListener('devicemotion', onMotion);
+    };
+    const askTilt = () => { window.removeEventListener('click', askTilt, true); window.removeEventListener('touchend', askTilt, true); enableTilt(); };
+    if (portrait && typeof DeviceMotionEvent !== 'undefined') {
+      if (typeof DeviceMotionEvent.requestPermission === 'function') { window.addEventListener('click', askTilt, true); window.addEventListener('touchend', askTilt, true); }
+      else enableTilt();
+    }
+
     // Physics ticks run back to back (they await the GPU); drawing happens every frame.
     let last = performance.now(), raf = 0, busy = false;
     const frame = (now) => {
@@ -138,6 +171,7 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
       if (!busy && driver) {
         last = now;
         busy = true;
+        if (tilt.on) sim.setGravityDir(tilt.x, tilt.y);
         driver.tick(dt, BUDGET).then((steps) => { if (steps) updateBoat(steps * sim.o.dt); }).catch((e) => console.error(e)).finally(() => { busy = false; });
       }
       settleStir(now);
@@ -218,6 +252,9 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
+      window.removeEventListener('devicemotion', onMotion);
+      window.removeEventListener('click', askTilt, true);
+      window.removeEventListener('touchend', askTilt, true);
       disposed = true;
       engine?.destroy();
       warp?.dispose();

@@ -162,10 +162,9 @@ body {
   }
 }
 
-/* A phone (portrait): the card would be the whole screen as a boat, so instead it is a compact
-   pier near the top of the second screen, and the pool fills the lower third beneath it with the
-   rain running off the card's sides into the water. The hull is a raft (fluid.js); the card is
-   held in place by the page, as the water never reaches it. */
+/* A phone (portrait): the card would be the whole screen as a boat, so there is no card at all.
+   The text sits near the top of the second screen straight on the field, the rain falls through
+   it, and the pool fills the lower third beneath. Tilting the phone tilts the water. */
 @media (max-aspect-ratio: 4/5) {
   .about {
     padding: calc(56px + 14px) 20px 0;
@@ -174,9 +173,10 @@ body {
     align-self: flex-start;
   }
   .boat {
-    padding: 16px 6% 20px;
-    font-size: 14.5px;
-    line-height: 1.4;
+    padding: 8px 4px 0;
+    font-size: 15px;
+    line-height: 1.42;
+    font-weight: 500;
   }
   .about h2 {
     margin-bottom: 0.8em;

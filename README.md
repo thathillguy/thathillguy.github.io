@@ -28,10 +28,12 @@ horizon is drawn; the hole shows only through what it does to the field and the 
   dry dock on the floor of that screen, sheds the rain off its sides, and is launched as a boat
   (boat.js) when the water around it would float it: lifted at a fixed slow rate until a cell of
   water is under the keel, then left to the pressure field, which lifts the keel only as much as
-  there is water beneath it. On a phone (portrait) the card would be the whole screen, so there it
-  is a compact pier near the top of the second screen instead, held by the page, and the pool fills
-  the lower third beneath it with the rain running off the card's sides. The state is snapshotted as
-  the fall begins and the same stars stream back to it when you scroll up.
+  there is water beneath it. On a phone (portrait) the card would be the whole screen, so there
+  is no card: the text sits near the top of the second screen straight on the field, the rain
+  falls through it, and the pool fills the lower third beneath. Tilting the phone tilts the water:
+  the fluid's gravity follows the motion sensor's in-plane gravity (iOS asks for the sensor on the
+  first tap). The state is snapshotted as the fall begins and the same stars stream back to it
+  when you scroll up.
 - `site/src/sim/calibrate.js` times a short run at startup and sizes the star count to the device:
   about 100,000 on a laptop GPU, 15,000 on the CPU path, fewer on weaker hardware.
 - `site/src/sim/driver.js` keeps the sim real-time within a per-frame budget by adapting the

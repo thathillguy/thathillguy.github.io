@@ -4,8 +4,10 @@ import NBodyCanvas from './components/NBodyCanvas.jsx';
 import Typewriter from './components/Typewriter.jsx';
 import { HULL_SHAPE, HULL_SHAPES, setHullProfile } from './sim/fluid.js';
 
-// A portrait screen (a phone) gets a tall card, which no ship profile survives: it rides a raft.
-setHullProfile(window.innerWidth < 0.8 * window.innerHeight ? 'raft' : 'ship');
+// A portrait screen (a phone) draws no card at all: the text sits on the field and the rain falls
+// through it (NBodyCanvas runs no boat there either). The raft profile is kept for the fluid code.
+const PORTRAIT = window.innerWidth < 0.8 * window.innerHeight;
+setHullProfile(PORTRAIT ? 'raft' : 'ship');
 const HULL_POINTS = HULL_SHAPE.map(([u, v]) => `${u * 100},${v * 100}`).join(' ');
 
 /** Where the hull's outline crosses height v (0..1): [left u, right u]. */
@@ -41,10 +43,12 @@ export default function App() {
       <section className="about" id="journey">
         <div className="boat-slot">
         <div ref={boat} className="boat">
-        <svg className="hull" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-          <polygon points={HULL_POINTS} vectorEffect="non-scaling-stroke" />
-          {WATERLINES.map(({ v, a, b }) => <line key={v} x1={a} y1={v} x2={b} y2={v} vectorEffect="non-scaling-stroke" />)}
-        </svg>
+        {!PORTRAIT && (
+          <svg className="hull" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            <polygon points={HULL_POINTS} vectorEffect="non-scaling-stroke" />
+            {WATERLINES.map(({ v, a, b }) => <line key={v} x1={a} y1={v} x2={b} y2={v} vectorEffect="non-scaling-stroke" />)}
+          </svg>
+        )}
         <h2>My Journey</h2>
         <div className="deck">
           <p>

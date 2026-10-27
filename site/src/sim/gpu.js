@@ -148,7 +148,7 @@ struct FParams {
   ix: f32, iy: f32, ir: f32, ia: f32,
   sx: f32, sy: f32, svx: f32, svy: f32,
   sr: f32, sb: f32, hasStir: f32, release: f32,
-  airDrag: f32, depth: f32, pad2: f32, pad3: f32,
+  airDrag: f32, depth: f32, gdx: f32, gdy: f32,
 }
 // the ship's profile, as fractions of its box (HULL_SHAPE in fluid.js)
 const SHAPE = array<vec2<f32>, ${HULL_SHAPE.length}>(${HULL_SHAPE.map(([u, v]) => `vec2<f32>(${u.toFixed(3)}, ${v.toFixed(3)})`).join(', ')});
@@ -294,7 +294,7 @@ fn fluid(@builtin(global_invocation_id) gid: vec3<u32>) {
   if (!rain && cnt > 1e-3) { v += q.visc * ps * (su / cnt - v); }
   let air = select(max(0.0, 1.0 - pl / (${AIR_PRESSURE} * q.K)), 1.0, rain); // unpressurised means air: a star there falls like rain
   v -= v * min(1.0, q.airDrag * rw * air * q.dtf);
-  var a = vec2<f32>(0.0, q.g * rw) - gr * (ps * 0.5 / q.h);
+  var a = vec2<f32>(q.gdx, q.gdy) * (q.g * rw) - gr * (ps * 0.5 / q.h);
   if (q.useAcc > 0.5) { a += acc[i]; }
   else if (q.hm > 0.0) {
     let d = vec2<f32>(q.hx, q.hy) - pos; let qq = dot(d, d) + q.he2; let s = inverseSqrt(qq);
@@ -470,7 +470,7 @@ export function createGpuEngine(device, sim) {
       b ? b.x : 0, b ? b.y : 0, b ? b.c : 1, b ? b.s : 0, b ? b.hw : 0, b ? b.hh : 0, b ? b.vx : 0, b ? b.vy : 0, b ? 1 : 0, HULL_MARGIN,
       im ? im.x : 0, im ? im.y : 0, im ? im.r : 0, im ? im.a : 0,
       st ? st.x : 0, st ? st.y : 0, st ? st.vx : 0, st ? st.vy : 0, sim.o.stirRadius, sim.o.stirBlend, st ? 1 : 0, sim.release,
-      sim.airDrag, f.depth, 0, 0,
+      sim.airDrag, f.depth, sim.gdir.x, sim.gdir.y,
     ]);
     device.queue.writeBuffer(fparams, 0, fdata);
   };

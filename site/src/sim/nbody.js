@@ -163,6 +163,7 @@ export class NBody {
     this.release = 0;     // the fraction of stars let go so far in this fall (chases `fall` at releaseRate)
     this.relw = new Float32Array(this.cap); // each star's release weight for the current fluid step
     this.landed = new Uint8Array(this.cap); // 1 once a released star has reached the water or the floor: rain until then
+    this.gdir = { x: 0, y: 1 }; // which way the fluid falls (see setGravityDir)
     this.fallen = false;
     this.snap = null;     // the state the moment a fall began: x, y, vx, vy, and the nebula cores
     this.rewind = null;   // { step, total } while the stars are being carried back to the snapshot
@@ -276,6 +277,12 @@ export class NBody {
   }
 
   /** A finger in the water at (x, y) moving at (vx, vy): the water nearby is dragged along each step. */
+  /** Which way is down for the fluid, as a unit vector (a phone's tilt; (0, 1) is the screen's down). */
+  setGravityDir(x, y) {
+    const len = Math.hypot(x, y);
+    if (len > 1e-6) { this.gdir.x = x / len; this.gdir.y = y / len; }
+  }
+
   setStir(x, y, vx, vy) {
     if (this.fall <= 0 || this.rewind) { this.stir = null; return; }
     this.stir = { x, y, vx, vy };

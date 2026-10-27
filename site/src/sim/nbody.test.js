@@ -297,3 +297,17 @@ test('on a two-screen page the rain falls out of the first screen and pools at t
   assert.ok(depth > 0.3 && depth < 0.5, `pool depth ${depth.toFixed(2)} of a screen`);
   assert.equal(sim.count, 8000, 'no star was culled on the way down');
 });
+
+test('tilting gravity (a phone held on its side) sends the pool to that side', () => {
+  const sim = new NBody({ bodies: 6000, random: seeded(3), releaseRate: 1000, screens: 1, halfW: 36, halfH: 14, nebulaRadius: 12, scaleLength: 4, separation: 24, periapsis: 8 });
+  sim.setFall(1);
+  for (let k = 0; k < 60 * 6; k++) sim.step();
+  const meanX = () => { let a = 0; for (let i = 0; i < sim.n; i++) a += sim.x[i]; return a / sim.n; };
+  const before = meanX();
+  sim.setGravityDir(0.5, 0.87); // the right edge down
+  for (let k = 0; k < 60 * 4; k++) sim.step();
+  const after = meanX();
+  assert.ok(Math.abs(before) < 3, `level pool centred (mean x ${before.toFixed(2)})`);
+  assert.ok(after > before + 6, `the pool moved right (mean x ${before.toFixed(2)} -> ${after.toFixed(2)})`);
+  assert.ok(Math.abs(sim.gdir.x - 0.498) < 0.01, 'the direction is stored as a unit vector');
+});

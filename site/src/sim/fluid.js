@@ -219,6 +219,7 @@ export class Fluid {
     const hull = sim.boat;
     const { K, cohesion, visc, g, bounce } = this.o;
     const { x, y, vx, vy, ax, ay, relw, landed } = sim;
+    const gdx = sim.gdir.x, gdy = sim.gdir.y; // which way is down (a phone's tilt)
     const airDrag = sim.airDrag, airP = AIR_PRESSURE * K; // pressure below which a star is in air (see fluid kernel in gpu.js)
     const inv = 1 / h;
     const roll = 0.6180339887 * ++this.tick; // each star's landing rolls run through a golden-ratio sequence
@@ -270,8 +271,8 @@ export class Fluid {
       // air is wherever the water is not pressing: unpressurised, so a star in it falls like rain
       const air = rain ? 1 : Math.max(0, 1 - pl / airP), slow = Math.min(1, airDrag * rw * air * dtf);
       u -= u * slow; v -= v * slow;
-      u += (ax[i] - gx * gs) * dtf;
-      v += (ay[i] - gy * gs + gg) * dtf;
+      u += (ax[i] - gx * gs + gg * gdx) * dtf;
+      v += (ay[i] - gy * gs + gg * gdy) * dtf;
       let px = x[i] + u * dtf, py = y[i] + v * dtf;
       if (px < left) { px = left; if (u < 0) u = -u * bounce; }
       else if (px > right) { px = right; if (u > 0) u = -u * bounce; }
