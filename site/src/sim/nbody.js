@@ -10,7 +10,7 @@
 // A star's drawn disc is a symbol. Its real radius is negligible next to its spacing, so stars
 // never touch: the dynamics are collisionless gravity, which is what galaxy encounters are.
 
-export const COLOURS = ['#3A7BD5', '#F28C28']; // one colour per nebula: blue, orange
+export const COLOURS = ['#288EF2', '#F28C28']; // one colour per nebula: blue, orange
 
 export const DEFAULTS = {
   bodies: 50000,
