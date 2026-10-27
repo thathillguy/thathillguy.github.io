@@ -67,14 +67,13 @@ export class Boat {
     const fill = fitted ? Math.min(1, fk / ((2 * kHalf * (kBot - kTop) * fluid.rho0) / (fluid.h * fluid.h))) : 0;
     this.fill = fill;
 
-    // pressure on every face but the deck, sampled a little outside each face. Before the grid's
+    // pressure on every face, sampled a little outside each face. Before the grid's
     // first fit (a scroll can release the boat between a tick and this call) there is no field
     // to sample yet: the boat simply falls for that frame.
     const A = hullArea(hw, hh), out = 0.8 * fluid.h;
     let fx = 0, fy = 0, fyFull = 0, tq = 0, wet = 0, total = 0; // fyFull: the lift with the keel counted in full, for the launch decision
     for (const e of fitted ? hullEdges(hw, hh) : []) {
-      if (e.ny < -0.9) continue; // the deck
-      const scale = e.ny > 0.7 ? fill : 1; // the keel: only as much lift as there is water under it
+      const scale = e.ny > 0.7 ? fill : 1; // the keel: only as much lift as there is water under it; the deck counts too: water on it presses down
       const N = Math.max(2, Math.round(e.len / (W / 16))), ds = e.len / N;
       const wnx = c * e.nx - s * e.ny, wny = s * e.nx + c * e.ny;   // world normal (outward)
       for (let i = 0; i < N; i++) {

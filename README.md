@@ -22,7 +22,8 @@ horizon is drawn; the hole shows only through what it does to the field and the 
   second screen arrives the stars are let go a few at a time and fall as rain (gravity and air
   drag only, nothing to one another) out of the first screen into the second, where each drop
   becomes water as it lands: a weakly compressible particle fluid on a grid (deposit, blur,
-  pressure, viscosity, walls) that fills the lower 40% of that screen. A drop lands only where
+  pressure, viscosity, walls, and a little thermal jitter: damped cold, a particle-in-cell pool
+  slowly packs itself into a lattice of clumps) that fills the lower 40% of that screen. A drop lands only where
   the water has room, and only with a small chance per substep, because the galaxy cores rain
   down denser than water and landing a column of them at once burst the pool. The card sits in
   dry dock on the floor of that screen, sheds the rain off its sides, and is launched as a boat

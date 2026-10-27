@@ -59,18 +59,18 @@ export function hullCentroid(hw, hh) {
 
 /**
  * For a point (lx, ly) in the hull's frame, the distance out through the nearest face and that
- * face's outward normal if the point is inside the hull grown by `margin`; null outside. The
- * deck is never the way out, so water never pools on the page. (Rain that hits the card is
- * handled apart: see the substep. It runs off the deck's corners, as off a roof. Rain let
- * through to the water under the keel had nowhere to go but out the sides, and burst out of
- * them; rain pushed out of the nearest side appeared to pass through the hull.)
+ * face's outward normal if the point is inside the hull grown by `margin`; null outside. Every
+ * face is a wall, the deck too: water that is thrown onto the deck stays on it until it runs
+ * off an end. (Rain that hits the card is handled apart, see the substep: it runs off the
+ * deck's corners, as off a roof, because the galaxies' worth of rain would otherwise pile up on
+ * the page. Pushing it out of the nearest side appeared to pass it through the hull, and letting
+ * it through to the water under the keel burst out of the sides.)
  */
 export function hullPush(lx, ly, hw, hh, margin = 0) {
   let best = null;
   for (const e of hullEdges(hw, hh)) {
     const sd = (lx - e.x0) * e.nx + (ly - e.y0) * e.ny - margin; // signed distance, negative inside
     if (sd >= 0) return null;
-    if (e.ny < -0.9) continue; // the deck
     if (!best || -sd < best.d) best = { d: -sd, nx: e.nx, ny: e.ny };
   }
   return best;
@@ -100,6 +100,9 @@ export const FLUID = {
   maxCells: 256,    // per axis
   sill: 1.5,        // cells of water below the floor the hull rests on (off the bottom edge of the screen), so a
                     // hull sitting on the bottom has water under its keel to be lifted by
+  jitter: 15,       // sim units/s: each substep a water star gets a random kick up to this: thermal motion. A pool damped
+                    // cold by the viscosity packs into a lattice of clumps over a minute or two (the cold-fluid instability of
+                    // particle-in-cell schemes); with this much warmth and the cohesion above it holds steady
 };
 
 export class Fluid {
@@ -176,17 +179,23 @@ export class Fluid {
   /** A 5-tap binomial blur of the deposited density, both ways: the pressure field needs to be
    *  smoother than a dozen stars per cell can make it. */
   _smooth() {
-    const { cols, rows, count, smooth, tmp } = this;
+    const { cols, rows, count, smooth } = this;
     // the margin cells lie beyond the walls: fold what landed there back onto the edge cells, and
     // blur with clamped indices, so the walls read as solid rather than as empty space
     for (let r = 0; r < rows; r++) { const o = r * cols; count[o + 1] += count[o]; count[o + cols - 2] += count[o + cols - 1]; count[o] = count[o + cols - 1] = 0; }
     for (let c = 0; c < cols; c++) { count[cols + c] += count[c]; count[(rows - 2) * cols + c] += count[(rows - 1) * cols + c]; count[c] = count[(rows - 1) * cols + c] = 0; }
+    this._blur(count, smooth);
+  }
+
+  /** The 5-tap binomial blur of a grid, both axes, into dst (margins excluded). */
+  _blur(src, dst) {
+    const { cols, rows, tmp } = this;
     const k = [1 / 16, 4 / 16, 6 / 16, 4 / 16, 1 / 16];
     for (let r = 1; r < rows - 1; r++) {
       const o = r * cols;
       for (let c = 1; c < cols - 1; c++) {
         let a = 0;
-        for (let t = -2; t <= 2; t++) { const cc = Math.min(Math.max(c + t, 1), cols - 2); a += k[t + 2] * count[o + cc]; }
+        for (let t = -2; t <= 2; t++) { const cc = Math.min(Math.max(c + t, 1), cols - 2); a += k[t + 2] * src[o + cc]; }
         tmp[o + c] = a;
       }
     }
@@ -194,12 +203,12 @@ export class Fluid {
       for (let r = 1; r < rows - 1; r++) {
         let a = 0;
         for (let t = -2; t <= 2; t++) { const rr = Math.min(Math.max(r + t, 1), rows - 2); a += k[t + 2] * tmp[rr * cols + c]; }
-        smooth[r * cols + c] = a;
+        dst[r * cols + c] = a;
       }
     }
-    // beyond the walls the pressure continues the edge value, so the gradient there is zero
-    for (let r = 0; r < rows; r++) { const o = r * cols; smooth[o] = smooth[o + 1]; smooth[o + cols - 1] = smooth[o + cols - 2]; }
-    for (let c = 0; c < cols; c++) { smooth[c] = smooth[cols + c]; smooth[(rows - 1) * cols + c] = smooth[(rows - 2) * cols + c]; }
+    // beyond the walls the field continues the edge value, so the gradient there is zero
+    for (let r = 0; r < rows; r++) { const o = r * cols; dst[o] = dst[o + 1]; dst[o + cols - 1] = dst[o + cols - 2]; }
+    for (let c = 0; c < cols; c++) { dst[c] = dst[cols + c]; dst[(rows - 1) * cols + c] = dst[(rows - 2) * cols + c]; }
   }
 
   /**
@@ -217,7 +226,7 @@ export class Fluid {
   substep(sim, n, dtf) {
     const { cols, rows, h, ox, oy, rho0, count, mx, my, pres } = this;
     const hull = sim.boat;
-    const { K, cohesion, visc, g, bounce } = this.o;
+    const { K, cohesion, visc, g, bounce, jitter } = this.o;
     const { x, y, vx, vy, ax, ay, relw, landed } = sim;
     const gdx = sim.gdir.x, gdy = sim.gdir.y; // which way is down (a phone's tilt)
     const airDrag = sim.airDrag, airP = AIR_PRESSURE * K; // pressure below which a star is in air (see fluid kernel in gpu.js)
@@ -267,7 +276,11 @@ export class Fluid {
         cnt += w * count[cc]; su += w * mx[cc]; sv += w * my[cc]; pl += w * pres[cc];
       }
       let u = vx[i], v = vy[i];
-      if (!rain && cnt > 1e-6) { u += vs * (su / cnt - u); v += vs * (sv / cnt - v); }
+      if (!rain && cnt > 1e-6) {
+        u += vs * (su / cnt - u); v += vs * (sv / cnt - v);
+        const sc = shedScatter(i); // thermal motion: a quasi-random kick per substep, from the star's hash and the substep count
+        u += jitter * ps * (2 * ((sc + roll) % 1) - 1); v += jitter * ps * (2 * ((sc * 7.1 + roll * 1.7) % 1) - 1);
+      }
       // air is wherever the water is not pressing: unpressurised, so a star in it falls like rain
       const air = rain ? 1 : Math.max(0, 1 - pl / airP), slow = Math.min(1, airDrag * rw * air * dtf);
       u -= u * slow; v -= v * slow;

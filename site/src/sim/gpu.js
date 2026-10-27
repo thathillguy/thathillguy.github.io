@@ -149,6 +149,7 @@ struct FParams {
   sx: f32, sy: f32, svx: f32, svy: f32,
   sr: f32, sb: f32, hasStir: f32, release: f32,
   airDrag: f32, depth: f32, gdx: f32, gdy: f32,
+  jitter: f32, pad1: f32, pad2: f32, pad3: f32,
 }
 // the ship's profile, as fractions of its box (HULL_SHAPE in fluid.js)
 const SHAPE = array<vec2<f32>, ${HULL_SHAPE.length}>(${HULL_SHAPE.map(([u, v]) => `vec2<f32>(${u.toFixed(3)}, ${v.toFixed(3)})`).join(', ')});
@@ -291,7 +292,13 @@ fn fluid(@builtin(global_invocation_id) gid: vec3<u32>) {
   let st = landed[i];
   let rain = (st & 1u) == 0u; // falling, and nothing to the other drops until it lands (see Fluid.substep)
   let ps = select(rw * rw, 0.0, rain); // pressure and viscosity arrive after gravity (see fluid.js)
-  if (!rain && cnt > 1e-3) { v += q.visc * ps * (su / cnt - v); }
+  if (!rain && cnt > 1e-3) {
+    v += q.visc * ps * (su / cnt - v);
+    // thermal motion: a quasi-random kick per substep, from the star's hash and its substep count (kept above bit 0)
+    let c = (st >> 1u) + 1u; landed[i] = (c << 1u) | 1u;
+    let sc = f32(i * 2654435761u) / 4294967296.0;
+    v += vec2<f32>(2.0 * fract(sc + f32(c) * 0.6180339887) - 1.0, 2.0 * fract(sc * 7.1 + f32(c) * 1.0506577) - 1.0) * (q.jitter * ps);
+  }
   let air = select(max(0.0, 1.0 - pl / (${AIR_PRESSURE} * q.K)), 1.0, rain); // unpressurised means air: a star there falls like rain
   v -= v * min(1.0, q.airDrag * rw * air * q.dtf);
   var a = vec2<f32>(q.gdx, q.gdy) * (q.g * rw) - gr * (ps * 0.5 / q.h);
@@ -321,7 +328,6 @@ fn fluid(@builtin(global_invocation_id) gid: vec3<u32>) {
       let nrm = normalize(vec2<f32>(e.y, -e.x));
       let sd = dot(l - p0, nrm) - q.margin;
       if (sd >= 0.0) { inside = false; }
-      if (nrm.y < -0.9) { continue; } // the deck is never the way out (see hullPush)
       if (-sd < dist) { dist = -sd; nl = nrm; }
     }
     if (inside && rain) {
@@ -404,7 +410,7 @@ export function createGpuEngine(device, sim) {
   const densBuf = device.createBuffer({ size: maxCells * 4, usage });
   const tmpBuf = device.createBuffer({ size: maxCells * 4, usage });
   const presBuf = device.createBuffer({ size: maxCells * 4, usage });
-  const fparams = device.createBuffer({ size: 192, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const fparams = device.createBuffer({ size: 208, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const readPres = [0, 1].map(() => device.createBuffer({ size: maxCells * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }));
   const pressure = new Float32Array(maxCells); // the fluid's pressure grid, for the boat
   let presCells = 0;                            // cells copied in the readback in flight
@@ -459,18 +465,19 @@ export function createGpuEngine(device, sim) {
     new Float32Array(paramData, 8, 6).set([sim.o.dt, sim.o.softening ** 2, sim.hole ?? -1, rewindS, sim.fall > 0 ? sim.release : 0, 1 / sim.rewindSeconds]);
     device.queue.writeBuffer(params, 0, paramData);
   };
-  const fdata = new ArrayBuffer(192);
+  const fdata = new ArrayBuffer(208);
   const writeFluidParams = (useAcc) => {
     const f = sim.fluid, o = f.o, hole = sim.hole, b = sim.boat;
     new Uint32Array(fdata, 0, 4).set([n, f.cols, f.rows, f.cols * f.rows]);
     const im = sim.pending, st = sim.stir;
-    new Float32Array(fdata, 16, 44).set([
+    new Float32Array(fdata, 16, 48).set([
       f.h, f.ox, f.oy, f.rho0, o.K, o.cohesion, o.visc, o.g, sim.fall, sim.o.dt / o.substeps, sim.halfW, f.floorY, o.bounce,
       hole == null ? 0 : sim.cx[hole], hole == null ? 0 : sim.cy[hole], hole == null ? 0 : sim.cm[hole], hole == null ? 1 : sim.ce2[hole], useAcc ? 1 : 0,
       b ? b.x : 0, b ? b.y : 0, b ? b.c : 1, b ? b.s : 0, b ? b.hw : 0, b ? b.hh : 0, b ? b.vx : 0, b ? b.vy : 0, b ? 1 : 0, HULL_MARGIN,
       im ? im.x : 0, im ? im.y : 0, im ? im.r : 0, im ? im.a : 0,
       st ? st.x : 0, st ? st.y : 0, st ? st.vx : 0, st ? st.vy : 0, sim.o.stirRadius, sim.o.stirBlend, st ? 1 : 0, sim.release,
       sim.airDrag, f.depth, sim.gdir.x, sim.gdir.y,
+      o.jitter, 0, 0, 0,
     ]);
     device.queue.writeBuffer(fparams, 0, fdata);
   };
