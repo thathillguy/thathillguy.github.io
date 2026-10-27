@@ -156,16 +156,38 @@ body {
 }
 
 @media (max-width: 600px) {
-  .boat {
-    padding: 18px 7% 26px;
-    font-size: 15px;
-  }
   .topbar .navlink {
     padding: 0 10px;
     margin-right: 2px;
   }
+}
+
+/* A phone (portrait): the card would be the whole screen as a boat, so instead it is a compact
+   pier near the top of the second screen, and the pool fills the lower third beneath it with the
+   rain running off the card's sides into the water. The hull is a raft (fluid.js); the card is
+   held in place by the page, as the water never reaches it. */
+@media (max-aspect-ratio: 4/5) {
   .about {
-    padding-top: 56px;
+    padding: calc(56px + 14px) 20px 0;
+  }
+  .boat-slot {
+    align-self: flex-start;
+  }
+  .boat {
+    padding: 16px 6% 20px;
+    font-size: 14.5px;
+    line-height: 1.4;
+  }
+  .about h2 {
+    margin-bottom: 0.8em;
+    font-size: 14px;
+  }
+  .about p {
+    margin-bottom: 0.8em;
+  }
+  .about .links {
+    gap: 6px 18px;
+    margin-top: 1em;
   }
 }
 

@@ -31,6 +31,7 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
     let boatReturning = false;
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const small = Math.min(window.innerWidth, window.innerHeight) < 700;
+    const portrait = window.innerWidth < 0.8 * window.innerHeight; // a phone: the card is a pier near the top and the pool is shallower (see styles.css)
 
     let width = 1, height = 1, dpr = 1, pxPerUnit = 1;
     const measure = () => {
@@ -54,7 +55,7 @@ export default function NBodyCanvas({ stars = 0, gpu = true, warpTarget = null, 
         ({ bodies, probe } = device ? await calibrateGpu(device, { limit }) : calibrateCpu({ limit: small ? 8000 : undefined }));
       }
       if (disposed) { device?.destroy(); return; }
-      driver = new Driver({ bodies, prime: !device, timeScale: TIME_SCALE, halfW: width / 2 / pxPerUnit, halfH: height / 2 / pxPerUnit });
+      driver = new Driver({ bodies, prime: !device, timeScale: TIME_SCALE, halfW: width / 2 / pxPerUnit, halfH: height / 2 / pxPerUnit, poolFraction: portrait ? 0.3 : 0.4 });
       sim = driver.sim;
       if (device) { engine = createGpuEngine(device, sim); driver.useGpu(engine); }
       driver.probe = probe;
