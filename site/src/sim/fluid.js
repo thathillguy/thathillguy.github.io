@@ -4,7 +4,7 @@
 // viewport. Weakly compressible, so the pool wobbles; cheap enough for a hundred thousand stars.
 // The GPU engine runs the same scheme in compute shaders (see gpu.js).
 
-export const HULL_MARGIN = 0.6; // stars keep this far from the boat's edges
+export const HULL_MARGIN = 0.25; // stars keep this far from the boat's edges (about the width of its outline's stroke)
 export const SHED_SPEED = 30;   // sim units/s: rain shed off the card's sides leaves with up to this much sideways, so it lands spread out
 
 /**
@@ -60,16 +60,17 @@ export function hullCentroid(hw, hh) {
 /**
  * For a point (lx, ly) in the hull's frame, the distance out through the nearest face and that
  * face's outward normal if the point is inside the hull grown by `margin`; null outside. The
- * deck is never the way out, so water never pools on the page. For rain (`shed`) neither is the
- * keel: the card sheds rain off its sides, as a roof does. Rain let through to the water under
- * the keel has nowhere to go but out the sides, and bursts out of them.
+ * deck is never the way out, so water never pools on the page. (Rain that hits the card is
+ * handled apart: see the substep. It runs off the deck's corners, as off a roof. Rain let
+ * through to the water under the keel had nowhere to go but out the sides, and burst out of
+ * them; rain pushed out of the nearest side appeared to pass through the hull.)
  */
-export function hullPush(lx, ly, hw, hh, margin = 0, shed = false) {
+export function hullPush(lx, ly, hw, hh, margin = 0) {
   let best = null;
   for (const e of hullEdges(hw, hh)) {
     const sd = (lx - e.x0) * e.nx + (ly - e.y0) * e.ny - margin; // signed distance, negative inside
     if (sd >= 0) return null;
-    if (e.ny < -0.9 || (shed && e.ny > 0.7)) continue; // the deck; and for rain, the keel
+    if (e.ny < -0.9) continue; // the deck
     if (!best || -sd < best.d) best = { d: -sd, nx: e.nx, ny: e.ny };
   }
   return best;
@@ -281,13 +282,19 @@ export class Fluid {
         // goes out the sides (hullPush) and is thrown a little clear of them
         const dx = px - hull.x, dy = py - hull.y;
         const lx = hull.c * dx + hull.s * dy, ly = -hull.s * dx + hull.c * dy;
-        const hit = hullPush(lx, ly, hull.hw, hull.hh, HULL_MARGIN, rain);
-        if (hit) {
+        const hit = hullPush(lx, ly, hull.hw, hull.hh, HULL_MARGIN);
+        if (hit && rain) {
+          // rain on the card runs off the nearer corner of the deck and down that side
+          shed = true;
+          const side = lx >= 0 ? 1 : -1, ex = side * (hull.hw + HULL_MARGIN), ey = -hull.hh - HULL_MARGIN;
+          px = hull.x + hull.c * ex - hull.s * ey; py = hull.y + hull.s * ex + hull.c * ey;
+          const sp = SHED_SPEED * (0.2 + 0.8 * shedScatter(i));
+          u = hull.vx + side * hull.c * sp; v = Math.max(v, hull.vy) + side * hull.s * sp;
+        } else if (hit) {
           const wnx = hull.c * hit.nx - hull.s * hit.ny, wny = hull.s * hit.nx + hull.c * hit.ny;
           px += wnx * hit.d; py += wny * hit.d;
           const rel = (u - hull.vx) * wnx + (v - hull.vy) * wny;
           if (rel < 0) { u -= rel * wnx * (1 + bounce); v -= rel * wny * (1 + bounce); }
-          if (rain) { shed = true; const sp = SHED_SPEED * (0.2 + 0.8 * shedScatter(i)); u += wnx * sp; v += wny * sp; }
         }
       }
       // into water with room in it, or onto the floor: room is measured against the full pool's hydrostatic pressure at this

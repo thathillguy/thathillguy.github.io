@@ -321,15 +321,22 @@ fn fluid(@builtin(global_invocation_id) gid: vec3<u32>) {
       let nrm = normalize(vec2<f32>(e.y, -e.x));
       let sd = dot(l - p0, nrm) - q.margin;
       if (sd >= 0.0) { inside = false; }
-      if (nrm.y < -0.9 || (rain && nrm.y > 0.7)) { continue; } // the deck is never the way out, nor the keel for rain (see hullPush)
+      if (nrm.y < -0.9) { continue; } // the deck is never the way out (see hullPush)
       if (-sd < dist) { dist = -sd; nl = nrm; }
     }
-    if (inside) {
+    if (inside && rain) {
+      // rain on the card runs off the nearer corner of the deck and down that side (see Fluid.substep)
+      shed = true;
+      let side = select(-1.0, 1.0, l.x >= 0.0);
+      let ex = side * (q.bhw + q.margin); let ey = -q.bhh - q.margin;
+      np = vec2<f32>(q.bx + q.bc * ex - q.bs * ey, q.by + q.bs * ex + q.bc * ey);
+      let sp = ${SHED_SPEED.toFixed(1)} * (0.2 + 0.8 * f32(i * 2654435761u) / 4294967296.0); // shedScatter
+      v = vec2<f32>(q.bvx + side * q.bc * sp, max(v.y, q.bvy) + side * q.bs * sp);
+    } else if (inside) {
       let wn = vec2<f32>(q.bc * nl.x - q.bs * nl.y, q.bs * nl.x + q.bc * nl.y);
       np += wn * dist;
       let rel = dot(v - vec2<f32>(q.bvx, q.bvy), wn);
       if (rel < 0.0) { v -= wn * (rel * (1.0 + q.bounce)); }
-      if (rain) { shed = true; v += wn * (${SHED_SPEED.toFixed(1)} * (0.2 + 0.8 * f32(i * 2654435761u) / 4294967296.0)); } // shedScatter
     }
   }
   if (rain) {
